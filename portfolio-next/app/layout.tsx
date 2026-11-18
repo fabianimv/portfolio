@@ -16,7 +16,7 @@ const firaCode = Fira_Code({
 
 export const metadata: Metadata = {
   title: "Fabián Muñoz - SRE | Terminal Portfolio",
-  description: "Site Reliability Engineer with 3+ years in observability. Interactive terminal & dashboard portfolio showcasing Kubernetes, Datadog, Grafana expertise.",
+  description: "Site Reliability Engineer with 4+ years in observability. Interactive terminal & dashboard portfolio showcasing Kubernetes, Datadog, Grafana expertise.",
   keywords: ["SRE", "Site Reliability Engineer", "Observability", "Kubernetes", "Datadog", "Grafana", "DevOps", "Chile"],
   authors: [{ name: "Fabián Muñoz" }],
   openGraph: {
