@@ -7,8 +7,8 @@ export const profile = {
     linkedin: 'https://linkedin.com/in/fabianimv',
     github: 'https://github.com/FabianIMV',
     bio: {
-        es: '3+ años construyendo sistemas observables de alta disponibilidad. Especializado en Golden Signals, SLI/SLO, correlación de incidentes y automatización.',
-        en: '3+ years building high-availability observable systems. Specialized in Golden Signals, SLI/SLO, incident correlation and automation.',
+        es: '4+ años construyendo sistemas observables de alta disponibilidad. Especializado en Golden Signals, SLI/SLO, correlación de incidentes y automatización.',
+        en: '4+ years building high-availability observable systems. Specialized in Golden Signals, SLI/SLO, incident correlation and automation.',
     },
     careerStartDate: '2022-11-01',
 };
