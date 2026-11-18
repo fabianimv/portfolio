@@ -203,7 +203,7 @@ ${CYAN}-rw-r--r--${RESET}  fabian  ${WHITE}contact.txt${RESET}
             const [action] = args;
             if (action === 'ps' || !action) {
                 return `\n${WHITE}${BOLD}CONTAINER ID   IMAGE                         STATUS${RESET}\n` +
-                    `${DIM}a7f3x2b1c${RESET}      fabian/portfolio:latest       ${GREEN}Up 3 years${RESET}\n` +
+                    `${DIM}a7f3x2b1c${RESET}      fabian/portfolio:latest       ${GREEN}Up 4 years${RESET}\n` +
                     `${DIM}k8s-monitor${RESET}    grafana/grafana:10.0          ${GREEN}Up 1 year${RESET}\n`;
             }
             if (action === 'images') {
