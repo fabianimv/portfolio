@@ -133,7 +133,7 @@ const PORTFOLIO_CONTEXT_ES = `
 PERFIL PROFESIONAL:
 - Fabián Muñoz es Ingeniero en Computación y Analista Programador
 - Actualmente SRE en Banco Falabella desde octubre 2025
-- +3 años de experiencia en observabilidad y SRE
+- +4 años de experiencia en observabilidad y SRE
 - Especializado en monitoreo de infraestructura bancaria digital
 
 HISTORIAL LABORAL:
@@ -172,7 +172,7 @@ const PORTFOLIO_CONTEXT_EN = `
 PROFESSIONAL PROFILE:
 - Fabián Muñoz is a Computer Engineer and Analyst Programmer
 - Currently SRE at Banco Falabella since October 2025
-- +3 years of experience in observability and SRE
+- +4 years of experience in observability and SRE
 - Specialized in digital banking infrastructure monitoring
 
 WORK HISTORY:
