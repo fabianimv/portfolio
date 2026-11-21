@@ -1336,12 +1336,24 @@ main {
     color: #ff9900;
 }
 
+.cert-gcp svg {
+    color: #4285f4;
+}
+
 .cert-azure svg {
     color: #6ea8ff;
 }
 
 .cert-oci svg {
-    color: var(--text-faint);
+    color: #f87171;
+}
+
+.cert-github svg {
+    color: #c084fc;
+}
+
+.cert-course svg {
+    color: var(--cyan);
 }
 
 .cert-state {
@@ -1360,10 +1372,84 @@ main {
     border: 1px solid rgba(0, 255, 136, 0.3);
 }
 
+.cert-state.info {
+    color: var(--cyan);
+    background: rgba(56, 189, 248, 0.12);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
 .cert-state.warn {
     color: var(--amber);
     background: var(--amber-dim);
     border: 1px solid rgba(255, 170, 0, 0.3);
+}
+
+.deploy-bullets {
+    list-style: none;
+    margin: 12px 0 16px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    color: var(--text-dim);
+    font-size: 0.88rem;
+    line-height: 1.55;
+}
+
+.deploy-bullets li {
+    position: relative;
+    padding-left: 16px;
+}
+
+.deploy-bullets li::before {
+    content: "▸";
+    position: absolute;
+    left: 0;
+    color: var(--green);
+}
+
+.deploy-bullets strong {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.project-badge {
+    display: inline-block;
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    color: var(--cyan);
+    background: rgba(56, 189, 248, 0.1);
+    border: 1px solid rgba(56, 189, 248, 0.28);
+    border-radius: 999px;
+    padding: 3px 9px;
+}
+
+.project-card-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.project-card-top .project-icon {
+    margin-bottom: 0;
+}
+
+.education-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.education-langs {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 
 .education-body {

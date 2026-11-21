@@ -238,12 +238,12 @@
         if (!el) return;
         const phrases = [
             'kubectl get pods -n production',
+            'Helm · Argo CD · Vault · Cloudflare WAF',
             'Golden Signals | SLI/SLO | MTTR',
-            'Building Observable Systems',
-            'argocd app sync portfolio --prune',
-            'Incident Correlation & Root Cause',
-            'AWS | Kubernetes | Terraform',
-            'terraform apply -auto-approve  # YOLO'
+            'AI-Assisted Incident Correlation & RCA',
+            'Python MCP Servers · PyPI & MCP Registry',
+            'Terraform | AWS · GCP · Azure',
+            'I like to keep the lights on.'
         ];
         if (prefersReducedMotion) { el.textContent = phrases[1]; return; }
 
@@ -299,16 +299,16 @@
         const scroll = $('#alertScroll');
         if (!scroll) return;
         const events = [
-            ['info', 'Deployment portfolio-v4 rolled out successfully'],
-            ['info', 'New certification acquired: AWS Cloud Practitioner'],
-            ['info', 'LinkedIn connection established'],
+            ['info', 'argocd app sync mcp-server --prune — HEALTHY'],
+            ['info', 'AI incident agent correlated Datadog + Loki deploy'],
+            ['info', 'PyPI package published: madeleine-mcp & voice-coach-mcp'],
+            ['info', 'Certification active: Google Cloud Generative AI Leader'],
             ['warn', 'Coffee level LOW — refill needed'],
-            ['info', 'GitHub contribution recorded'],
+            ['info', 'Terraform plan clean across Datadog, GCP, Azure & Cloudflare'],
             ['info', 'Portfolio visitor detected — hello there 👋'],
             ['info', 'System health check: PASSED'],
             ['warn', 'Konami code listener armed'],
-            ['info', 'SLO budget: 99.99% remaining'],
-            ['info', 'Kafka consumer lag: 0ms']
+            ['info', 'Kafka (Confluent) consumer lag: 0ms']
         ];
         const now = new Date();
         const items = events.map(([level, msg], i) => {
@@ -475,23 +475,23 @@
             },
             {
                 keys: ['experiencia', 'experience', 'trabajo', 'work', 'falabella', 'innfinit'],
-                es: 'Fabián es SRE en Banco Falabella (infraestructura bancaria crítica, Kafka, golden signals). Antes, 3 años como SRE en Innfinit para clientes Fortune 500 como Liberty Mutual y Sovos. 📊',
-                en: 'Fabián is an SRE at Banco Falabella (critical banking infrastructure, Kafka, golden signals). Before that, 3 years as SRE at Innfinit for Fortune 500 clients like Liberty Mutual and Sovos. 📊'
+                es: 'Fabián es SRE en Banco Falabella (Kubernetes con Helm/Argo CD, MCP en producción con Vault y WAF, plataforma AI de incidentes, Kafka HA, Terraform y Ansible). Antes, 3 años en Innfinit para clientes Fortune 500 (Liberty Mutual US, Sovos, Red Salud y Liberty Andes). 📊',
+                en: 'Fabián is an SRE at Banco Falabella (Kubernetes with Helm/Argo CD, production Python MCP with Vault & WAF, AI-assisted incident platform, Kafka HA, Terraform & Ansible). Previously 3 years at Innfinit for Fortune 500 clients (Liberty Mutual US, Sovos, Red Salud & Liberty Andes). 📊'
             },
             {
-                keys: ['proyectos', 'projects'],
-                es: 'Proyectos destacados: 🎵 YouTube Music Playlist Creator, 🥊 NutriCombat (PWA con IA), 📊 Dashboard Chile en Grafana, y un Kafka Home Lab. Mira la sección Proyectos del sitio.',
-                en: 'Featured projects: 🎵 YouTube Music Playlist Creator, 🥊 NutriCombat (AI-powered PWA), 📊 Chile Dashboard in Grafana, and a Kafka Home Lab. Check the Projects section.'
+                keys: ['proyectos', 'projects', 'mcp', 'pypi', 'madeleine'],
+                es: 'Proyectos destacados: 🧠 madeleine (servidor MCP en PyPI y Official MCP Registry), 🎙️ Voice Coach MCP (PyPI), 🎵 Setlist to YouTube Music (FastAPI + React, 240+ tests), 📊 Dashboard Chile y Kafka Home Lab.',
+                en: 'Featured projects: 🧠 madeleine (Python MCP server on PyPI & Official MCP Registry), 🎙️ Voice Coach MCP (PyPI), 🎵 Setlist to YouTube Music (FastAPI + React, 240+ tests), 📊 Chile Dashboard & Kafka Home Lab.'
             },
             {
                 keys: ['habilidades', 'skills', 'stack', 'tecnolog'],
-                es: 'Stack principal: ☁️ AWS, ⚓ Kubernetes, 🐙 Argo CD, 🏗️ Terraform, 📈 Grafana, 🔥 Prometheus, 🐶 Datadog, 🐍 Python y Bash.',
-                en: 'Main stack: ☁️ AWS, ⚓ Kubernetes, 🐙 Argo CD, 🏗️ Terraform, 📈 Grafana, 🔥 Prometheus, 🐶 Datadog, 🐍 Python and Bash.'
+                es: 'Stack principal: ⚓ Kubernetes, Helm, Argo CD, Vault, Terraform, Ansible, Rundeck, ☁️ AWS/GCP/Azure/Cloudflare, 🐶 Datadog, 📈 Grafana, 🔥 Prometheus, Loki, Kafka y 🐍 Python/MCP.',
+                en: 'Main stack: ⚓ Kubernetes, Helm, Argo CD, Vault, Terraform, Ansible, Rundeck, ☁️ AWS/GCP/Azure/Cloudflare, 🐶 Datadog, 📈 Grafana, 🔥 Prometheus, Loki, Kafka & 🐍 Python/MCP.'
             },
             {
                 keys: ['cert'],
-                es: 'Certificaciones: AWS Cloud Practitioner (activa), Azure AI Fundamentals y OCI Foundations. 🏅',
-                en: 'Certifications: AWS Cloud Practitioner (active), Azure AI Fundamentals and OCI Foundations. 🏅'
+                es: 'Certificaciones: Google Cloud Generative AI Leader, OCI Agentic AI Foundations Associate, AWS Cloud Practitioner, Azure AI Fundamentals (AI-900) y GitHub Copilot. Cursos: Confluent Kafka y Databricks GenAI. 🏅',
+                en: 'Certifications: Google Cloud Generative AI Leader, OCI Agentic AI Foundations Associate, AWS Cloud Practitioner, Azure AI Fundamentals (AI-900) & GitHub Copilot. Courses: Confluent Kafka & Databricks GenAI. 🏅'
             },
             {
                 keys: ['contacto', 'contact', 'email', 'correo', 'linkedin'],
@@ -622,8 +622,8 @@
                 whoami() {
                     print('<span class="t-green">Fabián Muñoz</span> — Site Reliability Engineer @ Banco Falabella');
                     print('<span class="t-dim">Santiago, Chile 🇨🇱 · ' + (es
-                        ? 'Observabilidad, Kubernetes, Argo CD y café.'
-                        : 'Observability, Kubernetes, Argo CD and coffee.') + '</span>');
+                        ? 'Kubernetes, GitOps, Observabilidad, AI Ops y Python MCP. "I like to keep the lights on."'
+                        : 'Kubernetes, GitOps, Observability, AI Ops & Python MCP. "I like to keep the lights on."') + '</span>');
                 },
                 experience() {
                     print('<span class="t-green">[ACTIVE]</span> Banco Falabella — SRE <span class="t-dim">(Oct 2025 → now)</span>');
@@ -631,21 +631,24 @@
                     print('<span class="t-amber">[LEGACY]</span> Recomin SM — Tech Support <span class="t-dim">(Mar 2019 → Nov 2022)</span>');
                 },
                 projects() {
-                    print('• YT Music Playlist Creator <span class="t-dim">Python</span>');
-                    print('• NutriCombat <span class="t-dim">PWA + Gemini AI</span>');
-                    print('• Chile Dashboard <span class="t-dim">Grafana</span>');
-                    print('• Kafka Home Lab <span class="t-dim">Docker</span>');
+                    print('• madeleine <span class="t-dim">Python MCP · PyPI &amp; Official MCP Registry</span>');
+                    print('• Voice Coach MCP <span class="t-dim">Python MCP · PyPI (on-device audio)</span>');
+                    print('• Setlist to YouTube Music <span class="t-dim">FastAPI + React · 240+ tests</span>');
+                    print('• Chile Dashboard <span class="t-dim">Grafana</span> · Kafka Home Lab <span class="t-dim">Docker</span>');
                     print('<a href="https://github.com/FabianIMV?tab=repositories" target="_blank" rel="noopener">github.com/FabianIMV</a>');
                 },
                 skills() {
-                    print('Observability  <span class="t-green">█████████░</span> Datadog, Grafana, Prometheus');
-                    print('Cloud/Infra    <span class="t-cmd">████████░░</span> AWS, K8s, Argo CD, Terraform');
-                    print('Development    <span class="t-amber">████████░░</span> Python, Bash, JavaScript');
+                    print('Observability  <span class="t-green">█████████░</span> Datadog, Prometheus, Grafana, Loki, Kafka');
+                    print('Platforms/IaC  <span class="t-cmd">█████████░</span> K8s, Helm, Argo CD, Vault, Terraform, AWS/GCP/Azure');
+                    print('Automation/AI  <span class="t-amber">█████████░</span> Python, MCP, Bash, Ansible, Rundeck, CI/CD');
                 },
                 certs() {
-                    print('✓ AWS Cloud Practitioner <span class="t-green">[ACTIVE]</span>');
-                    print('✓ Azure AI Fundamentals <span class="t-green">[ACTIVE]</span>');
-                    print('✓ OCI Foundations <span class="t-amber">[EXPIRED]</span>');
+                    print('✓ Google Cloud Generative AI Leader <span class="t-green">[CERT]</span>');
+                    print('✓ OCI Agentic AI Foundations Associate <span class="t-green">[CERT]</span>');
+                    print('✓ AWS Certified Cloud Practitioner <span class="t-green">[CERT]</span>');
+                    print('✓ Microsoft Azure AI Fundamentals (AI-900) <span class="t-green">[CERT]</span>');
+                    print('✓ GitHub Copilot <span class="t-green">[CERT]</span>');
+                    print('• Confluent Kafka &amp; Databricks GenAI <span class="t-cmd">[COURSES]</span>');
                 },
                 contact() {
                     print('📧 <a href="mailto:fabianignaciomv@gmail.com">fabianignaciomv@gmail.com</a>');
