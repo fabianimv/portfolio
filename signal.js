@@ -235,8 +235,9 @@
             }
         }
 
-        // Synthesized Web Audio sound effects (zero external assets, unlocked on click)
+        // Realistic synthesized gunshot + subtle self-heal chime (Web Audio API)
         let audioCtx = null;
+        let shaperCurve = null;
         function getAudioCtx() {
             const Ctx = window.AudioContext || window.webkitAudioContext;
             if (!Ctx) return null;
@@ -244,54 +245,95 @@
             if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
             return audioCtx;
         }
+        function getDriveCurve() {
+            if (shaperCurve) return shaperCurve;
+            const n = 512, curve = new Float32Array(n);
+            for (let i = 0; i < n; i++) {
+                const x = (i * 2) / n - 1;
+                curve[i] = Math.tanh(x * 3.4);
+            }
+            return (shaperCurve = curve);
+        }
 
         function playShotSound(power) {
             const ctxA = getAudioCtx();
             if (!ctxA) return;
             const now = ctxA.currentTime;
-            const intensity = Math.min(1.4, Math.max(0.75, (power || 24) / 26));
+            const intensity = Math.min(1.25, Math.max(0.85, (power || 26) / 26));
 
-            // 1. Cyber laser / blaster transient
-            const osc = ctxA.createOscillator();
-            const oscGain = ctxA.createGain();
-            osc.type = 'sawtooth';
-            osc.frequency.setValueAtTime(760 * intensity, now);
-            osc.frequency.exponentialRampToValueAtTime(85, now + 0.16);
-            oscGain.gain.setValueAtTime(0.18 * intensity, now);
-            oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.17);
-            osc.connect(oscGain).connect(ctxA.destination);
-            osc.start(now);
-            osc.stop(now + 0.18);
+            // Master bus with soft limiter so the shot hits hard without clipping
+            const comp = ctxA.createDynamicsCompressor();
+            comp.threshold.setValueAtTime(-10, now);
+            comp.knee.setValueAtTime(6, now);
+            comp.ratio.setValueAtTime(8, now);
+            comp.attack.setValueAtTime(0.001, now);
+            comp.release.setValueAtTime(0.12, now);
+            const master = ctxA.createGain();
+            master.gain.setValueAtTime(0.95 * intensity, now);
+            comp.connect(master).connect(ctxA.destination);
 
-            // 2. Low-end impact thump
-            const sub = ctxA.createOscillator();
-            const subGain = ctxA.createGain();
-            sub.type = 'sine';
-            sub.frequency.setValueAtTime(155, now);
-            sub.frequency.exponentialRampToValueAtTime(36, now + 0.22);
-            subGain.gain.setValueAtTime(0.26 * intensity, now);
-            subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.23);
-            sub.connect(subGain).connect(ctxA.destination);
-            sub.start(now);
-            sub.stop(now + 0.24);
+            // Helper: white noise buffer
+            const makeNoise = (dur) => {
+                const len = Math.floor(ctxA.sampleRate * dur);
+                const buf = ctxA.createBuffer(1, len, ctxA.sampleRate);
+                const ch = buf.getChannelData(0);
+                for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
+                const src = ctxA.createBufferSource();
+                src.buffer = buf;
+                return src;
+            };
 
-            // 3. Filtered noise burst (ASCII glyph shatter)
-            const dur = 0.12;
-            const buf = ctxA.createBuffer(1, Math.floor(ctxA.sampleRate * dur), ctxA.sampleRate);
-            const data = buf.getChannelData(0);
-            for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
-            const noise = ctxA.createBufferSource();
-            noise.buffer = buf;
-            const filter = ctxA.createBiquadFilter();
-            filter.type = 'bandpass';
-            filter.frequency.setValueAtTime(2400, now);
-            filter.frequency.exponentialRampToValueAtTime(480, now + dur);
-            filter.Q.value = 1.4;
-            const nGain = ctxA.createGain();
-            nGain.gain.setValueAtTime(0.16 * intensity, now);
-            nGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
-            noise.connect(filter).connect(nGain).connect(ctxA.destination);
-            noise.start(now);
+            // 1. Sharp supersonic crack (0–35ms)
+            const crack = makeNoise(0.045);
+            const hp = ctxA.createBiquadFilter();
+            hp.type = 'highpass';
+            hp.frequency.setValueAtTime(1500, now);
+            const crackGain = ctxA.createGain();
+            crackGain.gain.setValueAtTime(1.0, now);
+            crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.038);
+            crack.connect(hp).connect(crackGain).connect(comp);
+            crack.start(now);
+
+            // 2. Explosive muzzle blast body with saturation (0–190ms)
+            const blast = makeNoise(0.22);
+            const lp = ctxA.createBiquadFilter();
+            lp.type = 'lowpass';
+            lp.frequency.setValueAtTime(2200, now);
+            lp.frequency.exponentialRampToValueAtTime(180, now + 0.18);
+            lp.Q.value = 1.1;
+            const drive = ctxA.createWaveShaper();
+            drive.curve = getDriveCurve();
+            const blastGain = ctxA.createGain();
+            blastGain.gain.setValueAtTime(0.95, now);
+            blastGain.gain.exponentialRampToValueAtTime(0.001, now + 0.19);
+            blast.connect(lp).connect(drive).connect(blastGain).connect(comp);
+            blast.start(now);
+
+            // 3. Chest-thump low-end muzzle punch (0–140ms)
+            const punch = ctxA.createOscillator();
+            const punchGain = ctxA.createGain();
+            punch.type = 'triangle';
+            punch.frequency.setValueAtTime(220, now);
+            punch.frequency.exponentialRampToValueAtTime(40, now + 0.09);
+            punchGain.gain.setValueAtTime(0.85, now);
+            punchGain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+            punch.connect(punchGain).connect(comp);
+            punch.start(now);
+            punch.stop(now + 0.15);
+
+            // 4. Short acoustic echo tail (20–360ms)
+            const tail = makeNoise(0.38);
+            const tailFilter = ctxA.createBiquadFilter();
+            tailFilter.type = 'bandpass';
+            tailFilter.frequency.setValueAtTime(850, now + 0.02);
+            tailFilter.frequency.exponentialRampToValueAtTime(220, now + 0.36);
+            tailFilter.Q.value = 0.7;
+            const tailGain = ctxA.createGain();
+            tailGain.gain.setValueAtTime(0.001, now);
+            tailGain.gain.linearRampToValueAtTime(0.32, now + 0.025);
+            tailGain.gain.exponentialRampToValueAtTime(0.001, now + 0.36);
+            tail.connect(tailFilter).connect(tailGain).connect(comp);
+            tail.start(now);
         }
 
         function playHealSound() {
