@@ -229,7 +229,87 @@
                 ui.statusText.textContent = broken ? (next === 'critical' ? 'SEV-1 · AUTO-HEALING' : 'DEGRADED · AUTO-HEALING') : 'SYSTEM ONLINE';
                 if (ui.statusIndicator) ui.statusIndicator.classList.toggle('sx-degraded', broken);
             }
-            if (next === 'healed') incident.healedAt = t;
+            if (next === 'healed') {
+                incident.healedAt = t;
+                playHealSound();
+            }
+        }
+
+        // Synthesized Web Audio sound effects (zero external assets, unlocked on click)
+        let audioCtx = null;
+        function getAudioCtx() {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return null;
+            if (!audioCtx) audioCtx = new Ctx();
+            if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+            return audioCtx;
+        }
+
+        function playShotSound(power) {
+            const ctxA = getAudioCtx();
+            if (!ctxA) return;
+            const now = ctxA.currentTime;
+            const intensity = Math.min(1.4, Math.max(0.75, (power || 24) / 26));
+
+            // 1. Cyber laser / blaster transient
+            const osc = ctxA.createOscillator();
+            const oscGain = ctxA.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(760 * intensity, now);
+            osc.frequency.exponentialRampToValueAtTime(85, now + 0.16);
+            oscGain.gain.setValueAtTime(0.18 * intensity, now);
+            oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.17);
+            osc.connect(oscGain).connect(ctxA.destination);
+            osc.start(now);
+            osc.stop(now + 0.18);
+
+            // 2. Low-end impact thump
+            const sub = ctxA.createOscillator();
+            const subGain = ctxA.createGain();
+            sub.type = 'sine';
+            sub.frequency.setValueAtTime(155, now);
+            sub.frequency.exponentialRampToValueAtTime(36, now + 0.22);
+            subGain.gain.setValueAtTime(0.26 * intensity, now);
+            subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.23);
+            sub.connect(subGain).connect(ctxA.destination);
+            sub.start(now);
+            sub.stop(now + 0.24);
+
+            // 3. Filtered noise burst (ASCII glyph shatter)
+            const dur = 0.12;
+            const buf = ctxA.createBuffer(1, Math.floor(ctxA.sampleRate * dur), ctxA.sampleRate);
+            const data = buf.getChannelData(0);
+            for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+            const noise = ctxA.createBufferSource();
+            noise.buffer = buf;
+            const filter = ctxA.createBiquadFilter();
+            filter.type = 'bandpass';
+            filter.frequency.setValueAtTime(2400, now);
+            filter.frequency.exponentialRampToValueAtTime(480, now + dur);
+            filter.Q.value = 1.4;
+            const nGain = ctxA.createGain();
+            nGain.gain.setValueAtTime(0.16 * intensity, now);
+            nGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+            noise.connect(filter).connect(nGain).connect(ctxA.destination);
+            noise.start(now);
+        }
+
+        function playHealSound() {
+            if (!audioCtx || audioCtx.state !== 'running') return;
+            const now = audioCtx.currentTime;
+            [523.25, 783.99].forEach((freq, idx) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'triangle';
+                const t0 = now + idx * 0.065;
+                osc.frequency.setValueAtTime(freq, t0);
+                gain.gain.setValueAtTime(0.001, t0);
+                gain.gain.linearRampToValueAtTime(0.055, t0 + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.24);
+                osc.connect(gain).connect(audioCtx.destination);
+                osc.start(t0);
+                osc.stop(t0 + 0.25);
+            });
         }
 
         function updateIncident(health, t) {
@@ -369,7 +449,9 @@
         canvas.addEventListener('pointerup', (e) => { if (e.pointerType !== 'mouse') leave(); });
         canvas.addEventListener('pointerdown', (e) => {
             const p = toLocal(e);
-            shockwave(p.x, p.y, e.pointerType === 'mouse' ? 26 : 20);
+            const power = e.pointerType === 'mouse' ? 26 : 20;
+            playShotSound(power);
+            shockwave(p.x, p.y, power);
             if (e.pointerType !== 'mouse') { pointer.x = p.x; pointer.y = p.y; pointer.active = true; }
         });
         // On touch, the page can still scroll vertically; keep tracking the finger
