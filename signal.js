@@ -256,6 +256,7 @@
         }
 
         function playShotSound(power) {
+            if (window.FMSound && !window.FMSound.enabled()) return; // respect the nav mute toggle
             const ctxA = getAudioCtx();
             if (!ctxA) return;
             const now = ctxA.currentTime;
@@ -337,6 +338,7 @@
         }
 
         function playHealSound() {
+            if (window.FMSound && !window.FMSound.enabled()) return;
             if (!audioCtx || audioCtx.state !== 'running') return;
             const now = audioCtx.currentTime;
             [523.25, 783.99].forEach((freq, idx) => {
