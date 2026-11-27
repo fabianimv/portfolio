@@ -96,7 +96,8 @@ jobs:
           echo "$CFG" | jq .
           RUNTIME=$(echo "$CFG" | jq -r .runtime)
           case "$RUNTIME" in
-            nodejs18.x|nodejs2[0-9].x) ;;
+            nodejs2[0-9].x) ;;
+            nodejs18.x) echo "::warning::$FUNCTION_NAME runs on nodejs18.x, which AWS no longer supports. Switch to Node.js 22.x (Code → Runtime settings → Edit)." ;;
             *) echo "::error::$FUNCTION_NAME runs on $RUNTIME; the handler needs Node.js 18 or newer (built-in fetch)."; exit 1 ;;
           esac
           if [ "$(echo "$CFG" | jq -r .hasKey)" != "true" ]; then

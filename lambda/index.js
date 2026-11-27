@@ -32,6 +32,12 @@
 'use strict';
 
 const crypto = require('crypto');
+const dns = require('dns');
+
+// Lambda has no IPv6 egress. On Node 18, fetch tries the AAAA record of
+// generativelanguage.googleapis.com first and hangs ~10 s per attempt until it
+// gives up. Resolving IPv4 first fixes it on any runtime (Node 20+ also races both).
+dns.setDefaultResultOrder('ipv4first');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 
