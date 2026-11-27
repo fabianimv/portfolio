@@ -23,7 +23,7 @@ Lambda `portfolio-chatbot-handler` + API Gateway + DynamoDB for the portfolio's 
 | `CHAT_TABLE` | no | `portfolio-chatbot` |
 | `GEO_LOOKUP` | no | on; `off` stops sending visitor IPs to ipwho.is |
 
-Function settings: **Timeout 30 s**, runtime Node.js 18+, and **no VPC** (or a VPC with a NAT gateway), since it calls Gemini and ipwho.is over the internet. The deploy workflow warns about these and fails if `GEMINI_API_KEY` is missing.
+Function settings: **Timeout 30 s**, runtime **Node.js 24.x**, and **no VPC** (or a VPC with a NAT gateway), since it calls Gemini and ipwho.is over the internet. The deploy workflow warns about these and fails if `GEMINI_API_KEY` is missing.
 
 ## Automatic deploys (GitHub Actions)
 
@@ -31,7 +31,7 @@ Function settings: **Timeout 30 s**, runtime Node.js 18+, and **no VPC** (or a V
 
 - **Every PR** that touches the Lambda runs `node --check` and the unit tests (`npm test`).
 - **Every push to `main`** that touches the Lambda (or a manual run from the Actions tab) runs the tests, then:
-  1. checks the function configuration: Node.js 18+, `GEMINI_API_KEY` present (fails otherwise), timeout and VPC (warnings),
+  1. checks the function configuration: Node.js 24 (warns on older runtimes), `GEMINI_API_KEY` present (fails otherwise), timeout and VPC (warnings),
   2. builds `index.js` + `package.json` + production `node_modules` into a zip,
   3. backs up the code currently deployed,
   4. updates the function code (environment variables such as `GEMINI_API_KEY` are never touched),
@@ -100,7 +100,7 @@ npm install
 npm run deploy
 ```
 
-Runtime: Node.js 18 or newer (uses the built-in `fetch`); new functions are created on `nodejs22.x`. Timeout: 30 s.
+Runtime: Node.js 24.x (`deploy.js` creates new functions on `nodejs24.x`; CI tests on Node 24). Timeout: 30 s.
 
 ## Updating the profile
 

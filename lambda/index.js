@@ -26,7 +26,7 @@
  * - ALLOWED_ORIGINS  (optional, comma-separated; default "*")
  * - CHAT_TABLE      (optional, default "portfolio-chatbot"; see the DynamoDB section)
  *
- * Runtime: Node.js 18+ (uses the built-in fetch). AWS SDK v3 ships with the runtime.
+ * Runtime: Node.js 24.x (also runs on 18+; uses the built-in fetch). AWS SDK v3 ships with the runtime.
  */
 
 'use strict';

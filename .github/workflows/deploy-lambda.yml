@@ -42,12 +42,12 @@ jobs:
         working-directory: lambda
     steps:
       - name: Checkout 🛎️
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: lambda/package-lock.json
 
@@ -71,17 +71,17 @@ jobs:
       id-token: write
     steps:
       - name: Checkout 🛎️
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: lambda/package-lock.json
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_LAMBDA_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -95,9 +95,11 @@ jobs:
             --output json)
           echo "$CFG" | jq .
           RUNTIME=$(echo "$CFG" | jq -r .runtime)
+          # Tested on Node.js 24 (the version CI runs); older runtimes still work but get a warning
           case "$RUNTIME" in
-            nodejs2[0-9].x) ;;
-            nodejs18.x) echo "::warning::$FUNCTION_NAME runs on nodejs18.x, which AWS no longer supports. Switch to Node.js 22.x (Code → Runtime settings → Edit)." ;;
+            nodejs24.x) ;;
+            nodejs18.x|nodejs20.x|nodejs22.x) echo "::warning::$FUNCTION_NAME runs on $RUNTIME. Switch it to Node.js 24.x (Lambda → Code → Runtime settings → Edit); CI tests on Node 24 and AWS is retiring older runtimes." ;;
+            nodejs2[5-9].x) echo "::notice::$FUNCTION_NAME runs on $RUNTIME, newer than the Node 24 used in CI." ;;
             *) echo "::error::$FUNCTION_NAME runs on $RUNTIME; the handler needs Node.js 18 or newer (built-in fetch)."; exit 1 ;;
           esac
           if [ "$(echo "$CFG" | jq -r .hasKey)" != "true" ]; then

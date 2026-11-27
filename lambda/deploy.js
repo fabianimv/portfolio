@@ -162,7 +162,7 @@ async function createOrUpdateLambda(roleArn, geminiApiKey) {
 
             const params = {
                 FunctionName: FUNCTION_NAME,
-                Runtime: 'nodejs22.x',
+                Runtime: 'nodejs24.x',
                 Role: roleArn,
                 Handler: 'index.handler',
                 Code: { ZipFile: zipBuffer },
