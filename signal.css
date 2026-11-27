@@ -144,6 +144,12 @@ a {
     color: var(--acid);
 }
 
+/* Sound toggle: waves when on, a cross when muted */
+.sound-toggle .sound-mute-x { display: none; }
+.sound-toggle.is-muted .sound-waves { display: none; }
+.sound-toggle.is-muted .sound-mute-x { display: inline; }
+.sound-toggle.is-muted { opacity: 0.7; }
+
 /* ---------- Buttons ---------- */
 .btn {
     white-space: nowrap;

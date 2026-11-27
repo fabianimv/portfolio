@@ -32,6 +32,7 @@ Personal portfolio of a Site Reliability Engineer, designed as a system running 
 | Film grain | Inline SVG `feTurbulence` + CSS `@keyframes` |
 | Stack marquee, pulses, alert stream, toasts | CSS `@keyframes` |
 | Terminal mode 3D scene | three.js via React Three Fiber |
+| Tactile UI sounds | Web Audio API synthesis in `sounds.js` (no audio files): press / release / hover on buttons and links, toast chimes. Nav toggle mutes everything and is remembered in `localStorage` |
 | Terminal mode dashboard | Framer Motion |
 
 ## Project structure
@@ -41,6 +42,7 @@ Personal portfolio of a Site Reliability Engineer, designed as a system running 
 ├── index.html            # single page: SEO metadata, icon sprite, all sections
 ├── styles.css, main.js   # base styles and interactivity (chat, terminal, Ctrl+K palette, i18n)
 ├── signal.css, signal.js # visual layer: ASCII portrait, cursor, decode, tilt
+├── sounds.js             # synthesized UI sound effects + mute toggle
 ├── chatbot-config.js     # chat assistant API endpoint
 ├── portfolio-next/       # terminal mode (Next.js source + exported out/)
 ├── lambda/               # chat assistant backend
