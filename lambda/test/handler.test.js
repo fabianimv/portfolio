@@ -166,6 +166,12 @@ test('geolocation: once per new chat, cached, skipped for private IPs and failur
     assert.strictEqual(await _internals.lookupLocation('0.0.0.0'), null);
 });
 
+test('shortNetwork keeps the company name only', () => {
+    assert.strictEqual(_internals.shortNetwork('Bharti Airtel Limited, Plot Number 21 Rajiv Gandhi Technology Park, Chandigarh'), 'Bharti Airtel Limited');
+    assert.strictEqual(_internals.shortNetwork('Microsoft Corporation'), 'Microsoft Corporation');
+    assert.strictEqual(_internals.shortNetwork(undefined), undefined);
+});
+
 test('chileTime is readable and sortable', () => {
     assert.strictEqual(_internals.chileTime(new Date('2026-11-27T16:30:05Z')), '2026-11-27 13:30:05');
     assert.ok(_internals.chileTime(new Date('2026-01-01T00:00:00Z')) < _internals.chileTime(new Date('2026-01-02T00:00:00Z')));

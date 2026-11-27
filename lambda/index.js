@@ -376,6 +376,9 @@ const sessionKey = (sessionId) => ({ pk: `SESSION#${sessionId}`, sk: 'SESSION' }
 const geoCache = new Map();
 const PRIVATE_IP = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|fc|fd|fe80)/i;
 
+// "Bharti Airtel Limited, Plot Number 21 Rajiv Gandhi…" -> "Bharti Airtel Limited"
+const shortNetwork = (name) => (name ? String(name).split(',')[0].trim().slice(0, 60) || undefined : undefined);
+
 async function lookupLocation(ip) {
     if (!CONFIG.geoLookup || !ip || ip === 'unknown' || PRIVATE_IP.test(ip)) return null;
     if (geoCache.has(ip)) return geoCache.get(ip);
@@ -391,7 +394,7 @@ async function lookupLocation(ip) {
         const geo = {
             location: [d.city, d.region, d.country].filter(Boolean).join(', ') || undefined,
             country: d.country_code || undefined,
-            network: d.connection?.org || d.connection?.isp || undefined
+            network: shortNetwork(d.connection?.org || d.connection?.isp)
         };
         if (geoCache.size > 500) geoCache.clear();
         geoCache.set(ip, geo);
@@ -612,4 +615,4 @@ exports.handler = async (event, context) => {
 };
 
 // Exposed for local tests
-exports._internals = { toContents, cleanReply, sanitizeName, parseGemini, buildSystemPrompt, buildSet, clientInfo, chileTime, lookupLocation };
+exports._internals = { toContents, cleanReply, sanitizeName, parseGemini, buildSystemPrompt, buildSet, clientInfo, chileTime, lookupLocation, shortNetwork };
