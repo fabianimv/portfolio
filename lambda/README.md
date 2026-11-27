@@ -1,36 +1,82 @@
 # Portfolio Chatbot Lambda
 
-Deployment de Lambda + API Gateway para el chatbot con IA (Gemini).
+Lambda `portfolio-chatbot-handler` + API Gateway + DynamoDB for the portfolio's AI assistant, backed by Google Gemini.
 
-## Deployment
+## How it works
+
+1. The browser (`main.js`) sends `{ message, sessionId, visitorName, nameDeclined, lang, history }` to the API Gateway endpoint in `chatbot-config.js`.
+   - `sessionId` is a UUID generated in the browser and kept in `localStorage` together with the visitor's name.
+   - `history` is the last 12 messages of the conversation on screen, so the model has real multi-turn memory.
+2. `index.js` makes **one Gemini call per turn** with a `systemInstruction` (rules + profile) and structured output: `{ reply, visitorName, nameDeclined, language }`.
+   - **Name gate:** until the visitor gives a name, the model asks for it and doesn't answer yet. Once it gets the name, it also answers the question asked before. If the visitor refuses to share it, the gate opens.
+   - The model detects the name and language, no regexes.
+3. Each turn is logged in `portfolio-chatbot-messages` and the session (name, message count) in `portfolio-chatbot-sessions`. DynamoDB failures never break the reply.
+4. If the backend fails, the browser falls back to local keyword answers and logs a `console.warn`.
+
+## Environment variables
+
+| Variable | Required | Default |
+|---|---|---|
+| `GEMINI_API_KEY` | yes | |
+| `GEMINI_MODEL` | no | `gemini-flash-latest` (alias that always points to the newest Flash) |
+| `ALLOWED_ORIGINS` | no | `*` (e.g. `https://fabianimv.github.io` to restrict CORS) |
+| `MESSAGES_TABLE` / `SESSIONS_TABLE` | no | `portfolio-chatbot-messages` / `portfolio-chatbot-sessions` |
+
+## Automatic deploys (GitHub Actions)
+
+`.github/workflows/deploy-lambda.yml`:
+
+- **Every PR** that touches the Lambda runs `node --check` and the unit tests (`npm test`).
+- **Every push to `main`** that touches the Lambda (or a manual run from the Actions tab) runs the tests, then:
+  1. checks the function runtime is Node.js 18+,
+  2. builds `index.js` + `package.json` + production `node_modules` into a zip,
+  3. backs up the code currently deployed,
+  4. updates the function code (environment variables such as `GEMINI_API_KEY` are never touched),
+  5. smoke-tests the live function (CORS preflight → 204, empty POST → 400; neither calls Gemini nor writes to DynamoDB),
+  6. **restores the backup automatically** if any step after the update fails.
+
+AWS access uses GitHub OIDC: no AWS keys are stored in GitHub. The role can only be assumed by `main` of this repo, and can only read, update and invoke this one function.
+
+### One-time setup
+
+1. With AWS credentials that can manage IAM, run:
+
+   ```bash
+   bash lambda/setup-github-deploy.sh
+   ```
+
+   It creates the GitHub OIDC provider (if missing) and the `github-deploy-portfolio-chatbot` role, and prints its ARN.
+2. In GitHub → Settings → Secrets and variables → Actions → **Variables**, create `AWS_LAMBDA_DEPLOY_ROLE_ARN` with that ARN.
+3. Actions → Deploy Chatbot Lambda → **Run workflow** to check it end to end.
+
+Until the variable exists, the deploy job is skipped and only the tests run.
+
+## Manual deploy
+
+Option A, console / VS Code AWS Toolkit: replace the function's `index.js` with `lambda/index.js` and deploy. It uses no dependencies beyond the AWS SDK v3 included in the Node.js runtime.
+
+Option B, script (also creates the function, IAM role and API Gateway from scratch):
 
 ```bash
-# 1. Instalar dependencias
 cd lambda
 npm install
-
-# 2. Ejecutar deployment
 npm run deploy
-
-# 3. El script te pedirá tu API Key de Gemini
-# Ingrésala cuando se te solicite
-
-# 4. Al finalizar, copia la URL del endpoint
-# Ejemplo: https://xxxxxxxxxx.execute-api.us-east-1.amazonaws.com/prod/chat
-
-# 5. Actualiza el archivo config.js con la URL
-# Reemplaza: window.CHATBOT_API_ENDPOINT = null;
-# Por: window.CHATBOT_API_ENDPOINT = 'TU_URL_AQUI';
 ```
 
-## Estructura
+Runtime: Node.js 18 or newer (uses the built-in `fetch`); new functions are created on `nodejs22.x`. Timeout: 30 s.
 
-- `chatbot-handler.js` - Función Lambda
-- `deploy.js` - Script de deployment automático
-- `package.json` - Dependencias
+## Updating the profile
 
-## Requisitos
+The assistant only answers from the `PROFILE` constant at the top of `index.js`. When the CV or `index.html` changes, update it there and redeploy.
 
-- AWS CLI configurado
-- Node.js 18+
-- API Key de Google Gemini
+## Logs
+
+Logs are JSON lines (`request_ok`, `gemini_ok`, `gemini_error`, `rate_limited`, …) with latency and token usage, ready for CloudWatch Logs Insights:
+
+```
+fields @timestamp, event, latencyMs, usage.totalTokenCount, status, error
+| filter event in ["request_ok", "gemini_error", "request_failed"]
+| sort @timestamp desc
+```
+
+The `ver-*.sh` / `resumen-sesiones.sh` scripts still work to read conversations from DynamoDB.

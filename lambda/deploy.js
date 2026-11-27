@@ -70,7 +70,7 @@ async function createZipFile() {
         });
 
         archive.pipe(output);
-        archive.file(path.join(__dirname, 'chatbot-handler.js'), { name: 'index.js' });
+        archive.file(path.join(__dirname, 'index.js'), { name: 'index.js' });
         archive.finalize();
     });
 }
@@ -162,7 +162,7 @@ async function createOrUpdateLambda(roleArn, geminiApiKey) {
 
             const params = {
                 FunctionName: FUNCTION_NAME,
-                Runtime: 'nodejs18.x',
+                Runtime: 'nodejs22.x',
                 Role: roleArn,
                 Handler: 'index.handler',
                 Code: { ZipFile: zipBuffer },

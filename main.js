@@ -350,6 +350,50 @@
     // AI CHATBOT (AWS Lambda backend + local fallback)
     // ========================================
     let aiChatOpen = false;
+    let aiChatBusy = false;
+
+    // Conversation state. sessionId and the visitor's name survive reloads;
+    // the turn history lives only as long as the chat on screen.
+    const CHAT_STORE = 'fm-chat';
+    const chatState = loadChatState();
+
+    function loadChatState() {
+        let saved = {};
+        try { saved = JSON.parse(localStorage.getItem(CHAT_STORE) || '{}'); } catch (e) { /* storage blocked */ }
+        const sessionId = typeof saved.sessionId === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(saved.sessionId)
+            ? saved.sessionId
+            : (window.crypto && crypto.randomUUID ? crypto.randomUUID() : 'fm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+        return {
+            sessionId,
+            visitorName: typeof saved.visitorName === 'string' ? saved.visitorName : null,
+            nameDeclined: saved.nameDeclined === true,
+            history: []
+        };
+    }
+
+    function saveChatState() {
+        try {
+            localStorage.setItem(CHAT_STORE, JSON.stringify({
+                sessionId: chatState.sessionId,
+                visitorName: chatState.visitorName,
+                nameDeclined: chatState.nameDeclined
+            }));
+        } catch (e) { /* storage blocked */ }
+    }
+
+    // Returning visitors are greeted by name instead of being asked again
+    function personalizeGreeting() {
+        if (!chatState.visitorName) return;
+        const bubble = $('#aiChatMessages .chat-bubble-ai');
+        if (!bubble) return;
+        const es = document.createElement('span');
+        es.className = 'l-es';
+        es.textContent = '¡Hola de nuevo, ' + chatState.visitorName + '! 👋 ¿Qué te gustaría saber sobre Fabián?';
+        const en = document.createElement('span');
+        en.className = 'l-en';
+        en.textContent = 'Welcome back, ' + chatState.visitorName + '! 👋 What would you like to know about Fabián?';
+        bubble.replaceChildren(es, en);
+    }
 
     function updateChatPlaceholder() {
         const input = $('#aiChatInput');
@@ -415,19 +459,25 @@
 
     async function sendAIMessage() {
         const input = $('#aiChatInput');
-        if (!input) return;
-        const message = input.value.trim();
+        if (!input || aiChatBusy) return;
+        const message = input.value.trim().slice(0, 500);
         if (!message) return;
 
+        aiChatBusy = true;
         addAIMessage(message, 'user');
         input.value = '';
         showAITyping();
 
-        const minDelay = new Promise(r => setTimeout(r, 600));
-        const response = await getAIResponse(message);
-        await minDelay;
-        hideAITyping();
-        addAIMessage(response, 'ai');
+        try {
+            const minDelay = new Promise(r => setTimeout(r, 600));
+            const response = await getAIResponse(message);
+            await minDelay;
+            hideAITyping();
+            addAIMessage(response, 'ai');
+        } finally {
+            aiChatBusy = false;
+            if (window.innerWidth > 700) input.focus();
+        }
     }
 
     function detectLanguage(message) {
@@ -444,20 +494,34 @@
         if (endpoint) {
             try {
                 const controller = new AbortController();
-                const timer = setTimeout(() => controller.abort(), 12000);
+                const timer = setTimeout(() => controller.abort(), 28000);
                 const res = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: message }),
+                    body: JSON.stringify({
+                        message: message,
+                        sessionId: chatState.sessionId,
+                        visitorName: chatState.visitorName,
+                        nameDeclined: chatState.nameDeclined,
+                        lang: getLang(),
+                        history: chatState.history.slice(-12)
+                    }),
                     signal: controller.signal
                 });
                 clearTimeout(timer);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.message) return data.message;
+                const data = await res.json().catch(() => ({}));
+                if (res.ok && data.message) {
+                    if (data.visitorName && data.visitorName !== chatState.visitorName) chatState.visitorName = data.visitorName;
+                    if (data.nameDeclined) chatState.nameDeclined = true;
+                    saveChatState();
+                    chatState.history.push({ role: 'user', text: message }, { role: 'assistant', text: data.message });
+                    return data.message;
                 }
+                // Rate limited: the backend sends a friendly message
+                if (res.status === 429 && data.message) return data.message;
+                console.warn('[chat] backend error', res.status, data.error || '', data.requestId || '');
             } catch (e) {
-                // fall through to local responses
+                console.warn('[chat] backend unreachable, using local answers:', e.name === 'AbortError' ? 'timeout' : e.message);
             }
         }
         return getBasicResponse(message, lang);
@@ -525,6 +589,8 @@
         window.toggleAIChat = toggleAIChat;
         window.sendAIMessage = sendAIMessage;
         window.handleAIKeyPress = handleAIKeyPress;
+        saveChatState();
+        personalizeGreeting();
         updateChatPlaceholder();
     }
 
