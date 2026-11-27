@@ -78,7 +78,7 @@ async function locate(ips) {
                 out.set(ip, {
                     location: [d.city, d.region, d.country].filter(Boolean).join(', ') || undefined,
                     country: d.country_code || undefined,
-                    network: d.connection?.org || d.connection?.isp || undefined
+                    network: (d.connection?.org || d.connection?.isp || '').split(',')[0].trim().slice(0, 60) || undefined
                 });
             }
         } catch { /* leave unlocated */ }

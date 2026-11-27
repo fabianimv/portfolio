@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Private page: not linked anywhere, kept out of search engines -->
+    <meta name="robots" content="noindex, nofollow, noarchive">
+    <meta name="referrer" content="no-referrer">
+    <title>Visitantes del asistente</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="./chatbot-config.js"></script>
+    <style>
+        :root {
+            --bg: #0a0a0b;
+            --panel: #141416;
+            --panel-2: #1a1a1d;
+            --border: rgba(239, 237, 230, 0.09);
+            --border-strong: rgba(239, 237, 230, 0.2);
+            --text: #efede6;
+            --dim: #a4a29b;
+            --faint: #66645e;
+            --acid: #c8ff2e;
+            --acid-dim: rgba(200, 255, 46, 0.1);
+            --amber: #ffb020;
+            --amber-dim: rgba(255, 176, 32, 0.12);
+            --red: #ff4a2b;
+            --mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+            --sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            --radius: 8px;
+        }
+
+        * { box-sizing: border-box; }
+        html { color-scheme: dark; }
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font: 15px/1.5 var(--sans);
+            -webkit-font-smoothing: antialiased;
+        }
+        button, input, select { font: inherit; color: inherit; }
+        [hidden] { display: none !important; }
+
+        .wrap { max-width: 1240px; margin: 0 auto; padding: 24px 16px 64px; }
+
+        /* ---------- login ---------- */
+        .login {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 16px;
+        }
+        .login-card {
+            width: 100%;
+            max-width: 380px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 28px;
+        }
+        .login-card h1 { margin: 0 0 4px; font-size: 1.3rem; }
+        .login-card p { margin: 0 0 20px; color: var(--dim); font-size: 0.9rem; }
+        .field {
+            width: 100%;
+            background: var(--bg);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius);
+            padding: 10px 12px;
+            outline: none;
+        }
+        .field:focus { border-color: var(--acid); }
+        .check { display: flex; gap: 8px; align-items: center; margin: 12px 0 18px; color: var(--dim); font-size: 0.88rem; }
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+            border: 1px solid var(--border-strong);
+            background: transparent;
+            border-radius: 999px;
+            padding: 8px 16px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .btn:hover { border-color: var(--acid); color: var(--acid); }
+        .btn-primary { background: var(--acid); color: #0a0a0b; border-color: var(--acid); font-weight: 600; width: 100%; }
+        .btn-primary:hover { color: #0a0a0b; filter: brightness(1.05); }
+        .btn:disabled { opacity: 0.5; cursor: default; }
+        .error { color: var(--red); font-size: 0.88rem; min-height: 1.3em; margin-top: 10px; }
+
+        /* ---------- header ---------- */
+        header {
+            display: flex; flex-wrap: wrap; gap: 12px;
+            align-items: center; justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        header h1 { margin: 0; font-size: 1.4rem; }
+        header h1 span { color: var(--acid); }
+        .sub { color: var(--faint); font: 0.78rem var(--mono); }
+        .actions { display: flex; gap: 8px; }
+
+        /* ---------- stats ---------- */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+            margin-bottom: 18px;
+        }
+        .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+        .stat b { display: block; font-size: 1.5rem; font-weight: 600; }
+        .stat span { color: var(--dim); font-size: 0.82rem; }
+
+        /* ---------- filters ---------- */
+        .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+        .filters .field { width: auto; flex: 1 1 240px; }
+        .filters select.field { flex: 0 0 auto; }
+        .filters .check { margin: 0; }
+
+        /* ---------- table ---------- */
+        .table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+        .table th {
+            text-align: left; font: 500 0.72rem var(--mono); text-transform: uppercase; letter-spacing: 0.04em;
+            color: var(--faint); padding: 10px 12px; border-bottom: 1px solid var(--border);
+        }
+        .table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; font-size: 0.9rem; }
+        .table tbody tr { cursor: pointer; }
+        .table tbody tr:hover, .table tbody tr:focus-visible { background: var(--panel-2); outline: none; }
+        .table tbody tr:last-child td { border-bottom: 0; }
+        .when { font-family: var(--mono); font-size: 0.82rem; white-space: nowrap; color: var(--dim); }
+        .name { font-weight: 600; }
+        .muted { color: var(--faint); }
+        .question { color: var(--dim); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .num { font-family: var(--mono); text-align: right; }
+        .badge {
+            display: inline-block; font: 500 0.7rem var(--mono); padding: 1px 7px; border-radius: 999px;
+            border: 1px solid var(--border-strong); color: var(--dim); margin-left: 6px; vertical-align: 1px;
+        }
+        .badge.bot { color: var(--amber); border-color: rgba(255, 176, 32, 0.4); background: var(--amber-dim); }
+        .badge.old { color: var(--faint); }
+        .net { color: var(--faint); font-size: 0.82rem; }
+        .empty { text-align: center; color: var(--dim); padding: 40px 12px; }
+        .more { display: flex; justify-content: center; margin-top: 14px; }
+
+        /* Mobile: rows become cards */
+        @media (max-width: 760px) {
+            .table thead { display: none; }
+            .table, .table tbody, .table tr, .table td { display: block; width: 100%; }
+            .table tr { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+            .table td { border: 0; padding: 2px 0; }
+            .table td[data-label]::before {
+                content: attr(data-label); display: inline-block; min-width: 92px;
+                color: var(--faint); font: 0.72rem var(--mono); text-transform: uppercase;
+            }
+            .question { max-width: none; white-space: normal; }
+            .num { text-align: left; }
+        }
+
+        /* ---------- detail ---------- */
+        dialog {
+            width: min(720px, 100vw);
+            max-height: 100vh;
+            height: 100vh;
+            margin: 0 0 0 auto;
+            padding: 0;
+            border: 0;
+            border-left: 1px solid var(--border-strong);
+            background: var(--bg);
+            color: var(--text);
+        }
+        dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+        .detail-head {
+            position: sticky; top: 0; z-index: 1;
+            display: flex; justify-content: space-between; align-items: center; gap: 12px;
+            padding: 16px 20px; background: var(--bg); border-bottom: 1px solid var(--border);
+        }
+        .detail-head h2 { margin: 0; font-size: 1.15rem; }
+        .detail-body { padding: 18px 20px 40px; }
+        .facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0 0 22px; font-size: 0.9rem; }
+        .facts dt { color: var(--faint); font: 0.75rem/1.9 var(--mono); text-transform: uppercase; }
+        .facts dd { margin: 0; overflow-wrap: anywhere; }
+        .msg { margin-bottom: 18px; }
+        .msg-time { color: var(--faint); font: 0.75rem var(--mono); margin-bottom: 6px; }
+        .bubble { padding: 10px 14px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.92rem; }
+        .bubble.user { background: var(--acid-dim); border: 1px solid rgba(200, 255, 46, 0.25); margin-right: 15%; }
+        .bubble.bot { background: var(--panel); border: 1px solid var(--border); margin: 6px 0 0 15%; color: var(--dim); }
+        .loading { color: var(--dim); padding: 30px 0; }
+    </style>
+</head>
+
+<body>
+    <!-- ===== Login ===== -->
+    <main class="login" id="loginView">
+        <form class="login-card" id="loginForm" autocomplete="off">
+            <h1>Visitantes del asistente</h1>
+            <p>Panel privado. Ingresa la clave de administrador (<code>ADMIN_TOKEN</code> de la Lambda).</p>
+            <input class="field" id="tokenInput" type="password" placeholder="Clave de administrador" required autocomplete="current-password">
+            <label class="check"><input type="checkbox" id="rememberInput"> Recordar en este dispositivo</label>
+            <button class="btn btn-primary" id="loginBtn" type="submit">Entrar</button>
+            <div class="error" id="loginError" role="alert"></div>
+        </form>
+    </main>
+
+    <!-- ===== Dashboard ===== -->
+    <div class="wrap" id="appView" hidden>
+        <header>
+            <div>
+                <h1>Visitantes del asistente <span>AI</span></h1>
+                <div class="sub" id="updatedAt"></div>
+            </div>
+            <div class="actions">
+                <button class="btn" id="refreshBtn" type="button">↻ Actualizar</button>
+                <button class="btn" id="logoutBtn" type="button">Salir</button>
+            </div>
+        </header>
+
+        <section class="stats" id="stats" aria-label="Resumen"></section>
+
+        <div class="filters">
+            <input class="field" id="searchInput" type="search" placeholder="Buscar por nombre, IP, ciudad, red o pregunta">
+            <select class="field" id="periodSelect" aria-label="Periodo">
+                <option value="0">Todo</option>
+                <option value="1">Últimas 24 h</option>
+                <option value="7">Últimos 7 días</option>
+                <option value="30">Últimos 30 días</option>
+            </select>
+            <label class="check"><input type="checkbox" id="hideBotsInput"> Ocultar bots</label>
+        </div>
+
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Última visita</th>
+                    <th>Nombre</th>
+                    <th>Desde dónde</th>
+                    <th>IP / red</th>
+                    <th class="num">Msjs</th>
+                    <th>Llegó desde</th>
+                    <th>Última pregunta</th>
+                </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+        </table>
+        <div class="more"><button class="btn" id="moreBtn" type="button" hidden>Cargar más</button></div>
+    </div>
+
+    <!-- ===== Visitor detail ===== -->
+    <dialog id="detail" aria-labelledby="detailTitle">
+        <div class="detail-head">
+            <h2 id="detailTitle">Visitante</h2>
+            <button class="btn" id="closeDetail" type="button">Cerrar</button>
+        </div>
+        <div class="detail-body" id="detailBody"></div>
+    </dialog>
+
+    <script>
+        (function () {
+            'use strict';
+
+            const ENDPOINT = window.CHATBOT_API_ENDPOINT;
+            const STORE_KEY = 'fm-admin-token';
+            const $ = (id) => document.getElementById(id);
+
+            // Networks of cloud providers: a "visitor" from there is almost always a bot or crawler
+            const BOT_NETWORKS = /microsoft|amazon|aws|google llc|google cloud|alibaba|digitalocean|ovh|hetzner|oracle|linode|akamai|tencent|huawei|contabo|vultr|leaseweb|m247|datacamp|choopa|scaleway|cloudflare|ionos|hostinger|byteplus|fastly/i;
+
+            let token = null;
+            let visitors = [];
+            let nextCursor = null;
+
+            // ---------- storage (works without it) ----------
+            const store = {
+                get() {
+                    try { return sessionStorage.getItem(STORE_KEY) || localStorage.getItem(STORE_KEY); } catch (e) { return null; }
+                },
+                set(value, remember) {
+                    try { (remember ? localStorage : sessionStorage).setItem(STORE_KEY, value); } catch (e) { /* ignore */ }
+                },
+                clear() {
+                    try { sessionStorage.removeItem(STORE_KEY); localStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ }
+                }
+            };
+
+            // ---------- API ----------
+            async function api(payload) {
+                if (!ENDPOINT) throw new Error('No hay endpoint configurado (chatbot-config.js).');
+                const res = await fetch(ENDPOINT, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ admin: Object.assign({ token: token }, payload) })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (res.status === 401) throw Object.assign(new Error('Clave incorrecta.'), { auth: true });
+                if (res.status === 404) throw Object.assign(new Error('El panel no está activado: define ADMIN_TOKEN en la Lambda y despliega la versión con la API de administración.'), { auth: true });
+                if (res.status === 429) throw new Error('Demasiadas solicitudes; espera un minuto.');
+                if (!res.ok) throw new Error(data.error || ('Error ' + res.status));
+                return data;
+            }
+
+            // ---------- formatting ----------
+            const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sept', 'oct', 'nov', 'dic'];
+            // Stored as "2026-11-27 13:30:05" (Chile time)
+            function fmtWhen(t) {
+                const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(t || '');
+                if (!m) return t || '—';
+                const sameYear = m[1] === String(new Date().getFullYear());
+                return Number(m[3]) + ' ' + MONTHS[Number(m[2]) - 1] + (sameYear ? '' : ' ' + m[1]) + ', ' + m[4] + ':' + m[5];
+            }
+            function chileNowMinus(days) {
+                return new Intl.DateTimeFormat('sv-SE', {
+                    timeZone: 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+                }).format(new Date(Date.now() - days * 86400000));
+            }
+            function flag(cc) {
+                if (!/^[A-Z]{2}$/i.test(cc || '')) return '';
+                return String.fromCodePoint.apply(null, cc.toUpperCase().split('').map((c) => 127397 + c.charCodeAt(0))) + ' ';
+            }
+            const isBot = (v) => BOT_NETWORKS.test(v.network || '');
+            const host = (url) => (url || '').replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '');
+
+            // Safe element builder: text only, never innerHTML with visitor data
+            function el(tag, props, children) {
+                const node = document.createElement(tag);
+                if (props) {
+                    for (const k in props) {
+                        if (k === 'text') node.textContent = props[k];
+                        else if (k === 'class') node.className = props[k];
+                        else node.setAttribute(k, props[k]);
+                    }
+                }
+                (children || []).forEach((c) => c && node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c));
+                return node;
+            }
+
+            // ---------- render ----------
+            function filtered() {
+                const q = $('searchInput').value.trim().toLowerCase();
+                const days = Number($('periodSelect').value);
+                const since = days ? chileNowMinus(days) : '';
+                const hideBots = $('hideBotsInput').checked;
+                return visitors.filter((v) => {
+                    if (hideBots && isBot(v)) return false;
+                    if (since && (v.lastSeenAt || '') < since) return false;
+                    if (!q) return true;
+                    return [v.visitorName, v.ip, v.location, v.network, v.lastMessage, v.cameFrom, v.timezone]
+                        .some((f) => (f || '').toLowerCase().includes(q));
+                });
+            }
+
+            function renderStats(list) {
+                const humans = list.filter((v) => !isBot(v));
+                const countries = new Set(list.map((v) => v.country).filter(Boolean));
+                const items = [
+                    [list.length, 'Visitantes'],
+                    [list.filter((v) => v.visitorName).length, 'Con nombre'],
+                    [countries.size, 'Países'],
+                    [list.reduce((s, v) => s + (Number(v.messageCount) || 0), 0), 'Mensajes'],
+                    [list.length - humans.length, 'Bots probables']
+                ];
+                $('stats').replaceChildren.apply($('stats'), items.map((i) => el('div', { class: 'stat' }, [el('b', { text: String(i[0]) }), el('span', { text: i[1] })])));
+            }
+
+            function render() {
+                const list = filtered();
+                renderStats(list);
+                const rows = list.map((v) => {
+                    const nameCell = el('td', { 'data-label': 'Nombre' }, [
+                        v.visitorName ? el('span', { class: 'name', text: v.visitorName }) : el('span', { class: 'muted', text: v.nameDeclined ? 'anónimo' : 'sin nombre' }),
+                        isBot(v) ? el('span', { class: 'badge bot', text: 'bot' }) : null,
+                        v.migratedFrom ? el('span', { class: 'badge old', text: 'histórico', title: 'Copiado de las tablas antiguas' }) : null
+                    ]);
+                    const tr = el('tr', { tabindex: '0' }, [
+                        el('td', { class: 'when', 'data-label': 'Visita', text: fmtWhen(v.lastSeenAt) }),
+                        nameCell,
+                        el('td', { 'data-label': 'Lugar', text: v.location ? flag(v.country) + v.location : (v.timezone || '—') }),
+                        el('td', { 'data-label': 'IP' }, [el('div', { text: v.ip || '—' }), v.network ? el('div', { class: 'net', text: v.network }) : null]),
+                        el('td', { class: 'num', 'data-label': 'Msjs', text: String(v.messageCount || 0) }),
+                        el('td', { 'data-label': 'Llegó de', text: v.cameFrom ? host(v.cameFrom) : 'directo' }),
+                        el('td', { class: 'question', 'data-label': 'Pregunta', text: v.lastMessage || '—', title: v.lastMessage || '' })
+                    ]);
+                    tr.addEventListener('click', () => openDetail(v));
+                    tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(v); } });
+                    return tr;
+                });
+                if (!rows.length) {
+                    rows.push(el('tr', {}, [el('td', { class: 'empty', colspan: '7', text: visitors.length ? 'Ningún visitante coincide con los filtros.' : 'Todavía no hay visitantes registrados.' })]));
+                }
+                $('rows').replaceChildren.apply($('rows'), rows);
+                $('moreBtn').hidden = !nextCursor;
+            }
+
+            // ---------- detail ----------
+            async function openDetail(v) {
+                const dialog = $('detail');
+                $('detailTitle').textContent = v.visitorName || 'Visitante sin nombre';
+                const facts = el('dl', { class: 'facts' });
+                const add = (k, val) => { if (val) facts.append(el('dt', { text: k }), el('dd', { text: val })); };
+                add('Ubicación', v.location ? flag(v.country) + v.location : '');
+                add('Red', v.network ? v.network + (isBot(v) ? ' (probable bot)' : '') : '');
+                add('IP', v.ip);
+                add('Zona horaria', v.timezone);
+                add('Dispositivo', v.device);
+                add('Llegó desde', v.cameFrom || 'directo');
+                add('Primera visita', fmtWhen(v.firstSeenAt));
+                add('Última visita', fmtWhen(v.lastSeenAt));
+                add('Idioma', v.lastLanguage);
+                add('Sesión', v.sessionId);
+                const conv = el('div', {}, [el('div', { class: 'loading', text: 'Cargando conversación…' })]);
+                $('detailBody').replaceChildren(facts, conv);
+                if (!dialog.open) dialog.showModal();
+
+                try {
+                    const data = await api({ action: 'conversation', sessionId: v.sessionId });
+                    const msgs = data.messages || [];
+                    if (!msgs.length) {
+                        conv.replaceChildren(el('div', { class: 'muted', text: 'Sin mensajes guardados para esta sesión.' }));
+                        return;
+                    }
+                    conv.replaceChildren.apply(conv, msgs.map((m) => el('div', { class: 'msg' }, [
+                        el('div', { class: 'msg-time', text: fmtWhen(m.createdAt) + (m.language ? ' · ' + m.language : '') }),
+                        el('div', { class: 'bubble user', text: m.userMessage || '' }),
+                        el('div', { class: 'bubble bot', text: m.botResponse || '' })
+                    ])));
+                } catch (err) {
+                    conv.replaceChildren(el('div', { class: 'error', text: err.message }));
+                }
+            }
+
+            // ---------- load ----------
+            async function load(more) {
+                const btn = more ? $('moreBtn') : $('refreshBtn');
+                btn.disabled = true;
+                try {
+                    const data = await api({ action: 'visitors', limit: 200, cursor: more ? nextCursor : undefined });
+                    visitors = more ? visitors.concat(data.visitors || []) : (data.visitors || []);
+                    nextCursor = data.nextCursor || null;
+                    $('updatedAt').textContent = 'Actualizado ' + new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) + ' · horas de Chile';
+                    render();
+                } finally {
+                    btn.disabled = false;
+                }
+            }
+
+            async function enter(candidate, remember) {
+                token = candidate;
+                $('loginError').textContent = '';
+                $('loginBtn').disabled = true;
+                try {
+                    await load(false);
+                    store.set(token, remember);
+                    $('loginView').hidden = true;
+                    $('appView').hidden = false;
+                } catch (err) {
+                    token = null;
+                    store.clear();
+                    $('loginView').hidden = false;
+                    $('appView').hidden = true;
+                    $('loginError').textContent = err.message;
+                } finally {
+                    $('loginBtn').disabled = false;
+                }
+            }
+
+            // ---------- events ----------
+            $('loginForm').addEventListener('submit', (e) => {
+                e.preventDefault();
+                enter($('tokenInput').value.trim(), $('rememberInput').checked);
+            });
+            $('logoutBtn').addEventListener('click', () => {
+                token = null;
+                visitors = [];
+                store.clear();
+                $('tokenInput').value = '';
+                $('appView').hidden = true;
+                $('loginView').hidden = false;
+            });
+            $('refreshBtn').addEventListener('click', () => load(false).catch((err) => alert(err.message)));
+            $('moreBtn').addEventListener('click', () => load(true).catch((err) => alert(err.message)));
+            ['searchInput', 'periodSelect', 'hideBotsInput'].forEach((id) => $(id).addEventListener('input', render));
+            $('closeDetail').addEventListener('click', () => $('detail').close());
+            $('detail').addEventListener('click', (e) => { if (e.target === $('detail')) $('detail').close(); });
+
+            const saved = store.get();
+            if (saved) enter(saved, false);
+        })();
+    </script>
+</body>
+
+</html>
