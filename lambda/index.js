@@ -57,7 +57,9 @@ const CONFIG = {
     maxReplyChars: 1500,
     rateLimitPerMinute: 15,    // per IP, per warm Lambda container
     adminRateLimitPerMinute: 30,
-    geminiTimeoutMs: 12000,    // per attempt; 3 attempts fit in the 30 s Lambda timeout
+    geminiTimeoutMs: 9000,     // per attempt; 3 attempts fit in the 30 s Lambda timeout
+    modelCooldownMs: 5 * 60 * 1000,   // after a 503/429/timeout, prefer the other models for 5 min
+    modelGoneCooldownMs: 60 * 60 * 1000, // after a 404 (model retired), skip it for 1 h
     geminiAttempts: 3,
     // IP -> city/country/ISP via ipwho.is (HTTPS, no key), once per new chat. GEO_LOOKUP=off disables it.
     geoLookup: process.env.GEO_LOOKUP !== 'off',
@@ -150,7 +152,9 @@ function buildSystemPrompt({ visitorName, nameDeclined, pageLang }) {
 ${visitorBlock}
 
 HOW TO ANSWER
-- LANGUAGE: always reply in the language of the visitor's latest message, whatever it is (Spanish, English, Portuguese, French...), even if earlier turns or the site use another one. If they switch languages, switch with them. Only when the latest message gives no clue (a bare name, "ok", an emoji) keep the language of the previous turns, or the site's language: ${pageLang === 'es' ? 'Spanish' : 'English'}. Write Spanish in neutral Spanish. This applies to the name-gate messages too.
+- LANGUAGE: reply in the language the visitor writes in (Spanish, English, Portuguese, French...). If they clearly switch languages, switch with them.
+  Many short messages exist in several languages and say nothing about the language: "no", "sí"/"si", "ok", "hola", "gracias", a bare name, a number, an emoji. For those, KEEP the language of the visitor's previous messages in this conversation. Never switch language because of one of them.
+  Only if the visitor has written nothing else yet, use the site's language: ${pageLang === 'es' ? 'Spanish' : 'English'}. Write Spanish in neutral Spanish. This applies to the name-gate messages too.
 - Be brief: 1 to 4 sentences, under about 80 words, unless the visitor asks for detail. Lead with the direct answer.
 - Plain text only. No markdown: no asterisks, bold, headings or bullet symbols. Line breaks are fine. Write URLs in full so the widget can link them.
 - Friendly and professional. No hype words ("amazing", "incredible", "crack"). At most one emoji, and only when natural.
@@ -291,6 +295,23 @@ class GeminiError extends Error {
     constructor(message, status) { super(message); this.name = 'GeminiError'; this.status = status; }
 }
 
+// Circuit breaker (per warm container): a model that just failed with 503/429/timeout
+// goes to the back of the line for a while, so visitors don't wait for it to fail again.
+const modelCooldown = new Map(); // model -> cooling down until (ms)
+
+function coolDown(model, ms, reason) {
+    modelCooldown.set(model, Date.now() + ms);
+    log('warn', 'model_cooldown', { model, minutes: Math.round(ms / 60000), reason });
+}
+
+function modelsByHealth(gone) {
+    const now = Date.now();
+    const usable = CONFIG.models.filter((m) => !gone.has(m));
+    const healthy = usable.filter((m) => !(modelCooldown.get(m) > now));
+    const cooling = usable.filter((m) => modelCooldown.get(m) > now);
+    return [...healthy, ...cooling];
+}
+
 // Returns { data, model }. Walks the model list: primary, fallback, primary again…
 // 503/429/5xx/timeouts move on to the next model; 404 (model gone) drops that model;
 // other 4xx (bad request, bad key) stop right away since every model would fail the same.
@@ -309,12 +330,15 @@ async function callGemini({ systemPrompt, contents, apiKey, deadline }) {
 
     let lastError;
     const gone = new Set();
+    const tried = [];
     for (let attempt = 1; attempt <= CONFIG.geminiAttempts; attempt++) {
         const remaining = deadline - Date.now();
         if (remaining < 3000) break;
-        const candidates = CONFIG.models.filter((m) => !gone.has(m));
+        const candidates = modelsByHealth(gone);
         if (!candidates.length) break;
-        const model = candidates[(attempt - 1) % candidates.length];
+        // Each model once per request (healthiest first), then cycle again
+        const model = candidates.find((m) => !tried.includes(m)) || candidates[tried.length % candidates.length];
+        tried.push(model);
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
         const started = Date.now();
         try {
@@ -336,12 +360,14 @@ async function callGemini({ systemPrompt, contents, apiKey, deadline }) {
                 modelVersion: data.modelVersion,
                 usage: data.usageMetadata
             });
+            modelCooldown.delete(model);
             return { data, model };
         } catch (err) {
             lastError = err;
             const status = err.status;
             if (status === 404) gone.add(model);
             const retryable = !status || status === 404 || status === 429 || status >= 500;
+            if (retryable) coolDown(model, status === 404 ? CONFIG.modelGoneCooldownMs : CONFIG.modelCooldownMs, status || err.name);
             log('warn', 'gemini_error', {
                 attempt, model, status, retryable,
                 error: err.message,
@@ -745,4 +771,4 @@ exports.handler = async (event, context) => {
 };
 
 // Exposed for local tests
-exports._internals = { toContents, cleanReply, sanitizeName, parseGemini, buildSystemPrompt, buildSet, clientInfo, chileTime, lookupLocation, shortNetwork };
+exports._internals = { toContents, cleanReply, sanitizeName, parseGemini, buildSystemPrompt, buildSet, clientInfo, chileTime, lookupLocation, shortNetwork, modelCooldown };

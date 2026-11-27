@@ -65,6 +65,7 @@ const call = async (event) => {
 };
 
 test.beforeEach(() => {
+    _internals.modelCooldown.clear();
     geminiQueue = [];
     storedSession = null;
     ddbCalls.length = 0;
@@ -445,4 +446,46 @@ test('timeout on the main model -> fallback', async () => {
     const r = await call(ev({ message: 'hi', visitorName: 'Leo' }));
     assert.strictEqual(r.status, 200);
     assert.deepStrictEqual(geminiCalls.slice(before).map(modelOf), ['gemini-flash-latest', 'gemini-flash-lite-latest']);
+});
+
+// ---------------- Circuit breaker ----------------
+test('after a 503 the main model cools down: next requests go straight to the fallback', async () => {
+    geminiQueue.push(
+        { status: 503, body: { error: { message: 'high demand' } } },
+        ok({ reply: 'uno', visitorName: 'Leo', nameDeclined: false, language: 'es' })
+    );
+    await call(ev({ message: 'hola', visitorName: 'Leo' }));
+
+    geminiQueue.push(ok({ reply: 'dos', visitorName: 'Leo', nameDeclined: false, language: 'es' }));
+    const before = geminiCalls.length;
+    const r = await call(ev({ message: 'y?', visitorName: 'Leo' }));
+    assert.strictEqual(r.message, 'dos');
+    assert.deepStrictEqual(geminiCalls.slice(before).map(modelOf), ['gemini-flash-lite-latest'], 'no wasted call to the overloaded model');
+});
+
+test('cooled-down main model is tried again once the cooldown expires', async () => {
+    _internals.modelCooldown.set('gemini-flash-latest', Date.now() - 1);
+    geminiQueue.push(ok({ reply: 'ok', visitorName: 'Leo', nameDeclined: false, language: 'es' }));
+    const before = geminiCalls.length;
+    await call(ev({ message: 'hola', visitorName: 'Leo' }));
+    assert.deepStrictEqual(geminiCalls.slice(before).map(modelOf), ['gemini-flash-latest']);
+});
+
+test('if the fallback fails while the main model is cooling down, the main model is still tried', async () => {
+    _internals.modelCooldown.set('gemini-flash-latest', Date.now() + 60000);
+    geminiQueue.push(
+        { status: 503, body: { error: { message: 'high demand' } } },
+        ok({ reply: 'principal', visitorName: 'Leo', nameDeclined: false, language: 'es' })
+    );
+    const before = geminiCalls.length;
+    const r = await call(ev({ message: 'hola', visitorName: 'Leo' }));
+    assert.strictEqual(r.message, 'principal');
+    assert.deepStrictEqual(geminiCalls.slice(before).map(modelOf), ['gemini-flash-lite-latest', 'gemini-flash-latest']);
+    assert.ok(!_internals.modelCooldown.has('gemini-flash-latest'), 'a success clears the cooldown');
+});
+
+test('language rule: ambiguous short replies keep the conversation language', () => {
+    const p = _internals.buildSystemPrompt({ visitorName: 'Ana', nameDeclined: false, pageLang: 'en' });
+    assert.match(p, /"no", "sí"\/"si", "ok"/);
+    assert.match(p, /KEEP the language of the visitor's previous messages/);
 });
