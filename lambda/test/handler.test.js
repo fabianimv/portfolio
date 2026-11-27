@@ -31,6 +31,7 @@ global.fetch = async (url, opts) => {
     geminiCalls.push({ url, opts, body: JSON.parse(opts.body) });
     const next = geminiQueue.shift();
     if (!next) throw new Error('unexpected Gemini call');
+    if (next instanceof Error) throw next; // network failure / timeout, like real fetch
     return { ok: next.status === 200, status: next.status, json: async () => next.body };
 };
 
@@ -397,4 +398,51 @@ test('admin API is rate limited per IP', async () => {
     } finally {
         delete process.env.ADMIN_TOKEN;
     }
+});
+
+// ---------------- Model fallback ----------------
+const modelOf = (c) => c.url.match(/\/models\/([^:]+):generateContent$/)[1];
+
+test('503 "high demand" on the main model -> fallback model answers and is stored', async () => {
+    geminiQueue.push(
+        { status: 503, body: { error: { message: 'This model is currently experiencing high demand.' } } },
+        ok({ reply: 'Respuesta del respaldo', visitorName: 'Leo', nameDeclined: false, language: 'es' })
+    );
+    const before = geminiCalls.length;
+    const r = await call(ev({ message: 'hola', visitorName: 'Leo' }));
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.message, 'Respuesta del respaldo');
+    assert.deepStrictEqual(geminiCalls.slice(before).map(modelOf), ['gemini-flash-latest', 'gemini-flash-lite-latest']);
+    assert.strictEqual(ddbCalls.find((d) => d.name === 'PutCommand').input.Item.model, 'gemini-flash-lite-latest');
+});
+
+test('both models overloaded -> primary is tried again, then a friendly busy message (502)', async () => {
+    const busy = { status: 503, body: { error: { message: 'high demand' } } };
+    geminiQueue.push(busy, busy, busy);
+    const before = geminiCalls.length;
+    const r = await call(ev({ message: 'hola', visitorName: 'Leo', lang: 'es' }));
+    assert.strictEqual(r.status, 502);
+    assert.match(r.message, /mucha demanda/);
+    assert.deepStrictEqual(geminiCalls.slice(before).map(modelOf), ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-flash-latest']);
+});
+
+test('404 (model retired) drops that model and keeps using the other one', async () => {
+    geminiQueue.push(
+        { status: 503, body: { error: { message: 'high demand' } } },
+        { status: 404, body: { error: { message: 'models/gemini-flash-lite-latest is not found' } } },
+        ok({ reply: 'ok', visitorName: 'Leo', nameDeclined: false, language: 'en' })
+    );
+    const before = geminiCalls.length;
+    const r = await call(ev({ message: 'hi', visitorName: 'Leo' }));
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(geminiCalls.slice(before).map(modelOf), ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-flash-latest']);
+});
+
+test('timeout on the main model -> fallback', async () => {
+    const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+    geminiQueue.push(timeout, ok({ reply: 'ok', visitorName: 'Leo', nameDeclined: false, language: 'en' }));
+    const before = geminiCalls.length;
+    const r = await call(ev({ message: 'hi', visitorName: 'Leo' }));
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(geminiCalls.slice(before).map(modelOf), ['gemini-flash-latest', 'gemini-flash-lite-latest']);
 });

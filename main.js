@@ -529,8 +529,8 @@
                     chatState.history.push({ role: 'user', text: message }, { role: 'assistant', text: data.message });
                     return data.message;
                 }
-                // Rate limited: the backend sends a friendly message
-                if (res.status === 429 && data.message) return data.message;
+                // Rate limited or AI overloaded: the backend sends a friendly message
+                if ((res.status === 429 || res.status === 502) && data.message) return data.message;
                 console.warn('[chat] backend error', res.status, data.error || '', data.requestId || '');
             } catch (e) {
                 console.warn('[chat] backend unreachable, using local answers:', e.name === 'AbortError' ? 'timeout' : e.message);
