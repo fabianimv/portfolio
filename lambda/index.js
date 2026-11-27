@@ -7,7 +7,7 @@
  * - Model: `gemini-flash-latest` alias (always the newest Flash) instead of the
  *   retired experimental `gemini-2.0-flash-exp`. Override with GEMINI_MODEL.
  * - One structured-output call per turn returns { reply, visitorName, nameDeclined,
- *   language }: the model detects the visitor's name and language, so the regexes that
+ *   language }: the model detects the visitor's name and language (fallback model on 503s), so the regexes that
  *   saved "Kubernetes" or "experiencia laboral" as a name are gone.
  * - Name gate kept: the bot asks for the visitor's name before answering. Once it
  *   gets it, it also answers the question the visitor asked before giving it.
@@ -23,6 +23,7 @@
  * Environment variables:
  * - GEMINI_API_KEY   (required)
  * - GEMINI_MODEL     (optional, default "gemini-flash-latest")
+ * - GEMINI_FALLBACK_MODELS (optional, comma-separated, default "gemini-flash-lite-latest")
  * - ADMIN_TOKEN      (optional; enables the private visitors dashboard API, see admin.html)
  * - ALLOWED_ORIGINS  (optional, comma-separated; default "*")
  * - CHAT_TABLE      (optional, default "portfolio-chatbot"; see the DynamoDB section)
@@ -35,15 +36,19 @@
 const crypto = require('crypto');
 const dns = require('dns');
 
-// Lambda has no IPv6 egress. On Node 18, fetch tries the AAAA record of
-// generativelanguage.googleapis.com first and hangs ~10 s per attempt until it
-// gives up. Resolving IPv4 first fixes it on any runtime (Node 20+ also races both).
+// Precaution: Lambda has no IPv6 egress, so never try an AAAA record first.
+// (The 502s in Nov 2026 turned out to be Gemini 503 "high demand"; see the model fallback.)
 dns.setDefaultResultOrder('ipv4first');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
 
 const CONFIG = {
-    model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
+    // Tried in order. When one is overloaded (503/429), times out or doesn't exist (404),
+    // the next one answers. Override with GEMINI_MODEL / GEMINI_FALLBACK_MODELS (comma-separated).
+    models: [...new Set([
+        process.env.GEMINI_MODEL || 'gemini-flash-latest',
+        ...(process.env.GEMINI_FALLBACK_MODELS ?? 'gemini-flash-lite-latest').split(',')
+    ].map((m) => m.trim()).filter(Boolean))],
     table: process.env.CHAT_TABLE || 'portfolio-chatbot',
     allowedOrigins: (process.env.ALLOWED_ORIGINS || '*').split(',').map((s) => s.trim()).filter(Boolean),
     maxMessageChars: 500,
@@ -52,8 +57,8 @@ const CONFIG = {
     maxReplyChars: 1500,
     rateLimitPerMinute: 15,    // per IP, per warm Lambda container
     adminRateLimitPerMinute: 30,
-    geminiTimeoutMs: 20000,
-    geminiAttempts: 2,
+    geminiTimeoutMs: 12000,    // per attempt; 3 attempts fit in the 30 s Lambda timeout
+    geminiAttempts: 3,
     // IP -> city/country/ISP via ipwho.is (HTTPS, no key), once per new chat. GEO_LOOKUP=off disables it.
     geoLookup: process.env.GEO_LOOKUP !== 'off',
     geoTimeoutMs: 2500,
@@ -286,8 +291,10 @@ class GeminiError extends Error {
     constructor(message, status) { super(message); this.name = 'GeminiError'; this.status = status; }
 }
 
+// Returns { data, model }. Walks the model list: primary, fallback, primary again…
+// 503/429/5xx/timeouts move on to the next model; 404 (model gone) drops that model;
+// other 4xx (bad request, bad key) stop right away since every model would fail the same.
 async function callGemini({ systemPrompt, contents, apiKey, deadline }) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(CONFIG.model)}:generateContent`;
     const body = JSON.stringify({
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents,
@@ -301,9 +308,14 @@ async function callGemini({ systemPrompt, contents, apiKey, deadline }) {
     });
 
     let lastError;
+    const gone = new Set();
     for (let attempt = 1; attempt <= CONFIG.geminiAttempts; attempt++) {
         const remaining = deadline - Date.now();
         if (remaining < 3000) break;
+        const candidates = CONFIG.models.filter((m) => !gone.has(m));
+        if (!candidates.length) break;
+        const model = candidates[(attempt - 1) % candidates.length];
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
         const started = Date.now();
         try {
             const res = await fetch(url, {
@@ -319,24 +331,27 @@ async function callGemini({ systemPrompt, contents, apiKey, deadline }) {
             }
             log('info', 'gemini_ok', {
                 attempt,
+                model,
                 latencyMs: Date.now() - started,
                 modelVersion: data.modelVersion,
                 usage: data.usageMetadata
             });
-            return data;
+            return { data, model };
         } catch (err) {
             lastError = err;
             const status = err.status;
-            const retryable = !status || status === 429 || status >= 500;
+            if (status === 404) gone.add(model);
+            const retryable = !status || status === 404 || status === 429 || status >= 500;
             log('warn', 'gemini_error', {
-                attempt, status, retryable,
+                attempt, model, status, retryable,
                 error: err.message,
                 // Network failures hide the real reason here (ENOTFOUND, ETIMEDOUT, TimeoutError…)
                 cause: err.name === 'TimeoutError' ? `no response within ${Date.now() - started} ms` : (err.cause?.code || err.cause?.message),
                 elapsedMs: Date.now() - started
             });
             if (!retryable) break;
-            if (attempt < CONFIG.geminiAttempts) await sleep(700 * attempt);
+            // Switching models needs no long backoff
+            if (attempt < CONFIG.geminiAttempts) await sleep(250);
         }
     }
     throw lastError || new GeminiError('Gemini call skipped: not enough time left');
@@ -461,7 +476,7 @@ async function persist(t) {
         botResponse: t.response,
         language: t.language,
         awaitingName: t.awaitingName,
-        model: CONFIG.model,
+        model: t.model,
         latencyMs: t.latencyMs,
         tokens: t.usage?.totalTokenCount,
         requestId: t.requestId
@@ -522,6 +537,12 @@ function clientInfo(body, event) {
 const FALLBACK_REPLY = {
     es: 'Ahora mismo no puedo responder bien esa pregunta. Puedes escribirle a Fabián directamente: https://linkedin.com/in/fabianimv o fabianignaciomv@gmail.com',
     en: "I can't answer that properly right now. You can reach Fabián directly: https://linkedin.com/in/fabianimv or fabianignaciomv@gmail.com"
+};
+
+// Shown in the chat when every Gemini model is overloaded or unreachable
+const BUSY_REPLY = {
+    es: 'Ahora mismo el asistente tiene mucha demanda 🙏 Intenta de nuevo en unos segundos. Si es urgente, puedes escribirle a Fabián por LinkedIn: https://linkedin.com/in/fabianimv',
+    en: "The assistant is very busy right now 🙏 Please try again in a few seconds. If it's urgent, you can reach Fabián on LinkedIn: https://linkedin.com/in/fabianimv"
 };
 
 // ============================================================
@@ -681,13 +702,15 @@ exports.handler = async (event, context) => {
 
     let result;
     let usage;
+    let model;
     try {
-        const data = await callGemini({ systemPrompt, contents, apiKey, deadline });
-        usage = data.usageMetadata;
-        result = parseGemini(data);
+        const answer = await callGemini({ systemPrompt, contents, apiKey, deadline });
+        model = answer.model;
+        usage = answer.data.usageMetadata;
+        result = parseGemini(answer.data);
     } catch (err) {
         log('error', 'request_failed', { requestId, status: err.status, error: err.message, latencyMs: Date.now() - started });
-        return reply(502, headers, { error: 'Assistant temporarily unavailable', requestId });
+        return reply(502, headers, { error: 'Assistant temporarily unavailable', requestId, message: BUSY_REPLY[pageLang] });
     }
 
     if (result.blocked || !result.reply) {
@@ -704,11 +727,11 @@ exports.handler = async (event, context) => {
     await persist({
         sessionId, ip, message, response: result.reply, language, pageLang,
         visitorName: finalName, nameDeclined: finalDeclined, requestId, latencyMs, awaitingName,
-        usage, client: clientInfo(body, event), geo: await geoPromise
+        usage, model, client: clientInfo(body, event), geo: await geoPromise
     });
 
     log('info', 'request_ok', {
-        requestId, sessionId, language, latencyMs, awaitingName,
+        requestId, sessionId, model, language, latencyMs, awaitingName,
         nameLearned: !visitorName && !!finalName, historyItems: contents.length - 1, finishReason: result.finishReason
     });
 

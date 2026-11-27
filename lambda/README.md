@@ -19,6 +19,7 @@ Lambda `portfolio-chatbot-handler` + API Gateway + DynamoDB for the portfolio's 
 |---|---|---|
 | `GEMINI_API_KEY` | yes | |
 | `GEMINI_MODEL` | no | `gemini-flash-latest` (alias that always points to the newest Flash) |
+| `GEMINI_FALLBACK_MODELS` | no | `gemini-flash-lite-latest`. Used when the main model answers 503/429 ("high demand"), times out or no longer exists. Comma-separated, tried in order |
 | `ALLOWED_ORIGINS` | no | `*` (e.g. `https://fabianimv.github.io` to restrict CORS) |
 | `CHAT_TABLE` | no | `portfolio-chatbot` |
 | `ADMIN_TOKEN` | no | unset = private dashboard disabled (see [Private dashboard](#private-dashboard-adminhtml)) |
