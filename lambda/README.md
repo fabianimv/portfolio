@@ -10,7 +10,7 @@ Lambda `portfolio-chatbot-handler` + API Gateway + DynamoDB for the portfolio's 
 2. `index.js` makes **one Gemini call per turn** with a `systemInstruction` (rules + profile) and structured output: `{ reply, visitorName, nameDeclined, language }`.
    - **Name gate:** until the visitor gives a name, the model asks for it and doesn't answer yet. Once it gets the name, it also answers the question asked before. If the visitor refuses to share it, the gate opens.
    - The model detects the name and language, no regexes.
-3. Each turn is logged in `portfolio-chatbot-messages` and the session (name, message count) in `portfolio-chatbot-sessions`. DynamoDB failures never break the reply.
+3. Each turn is saved in the single DynamoDB table `portfolio-chatbot` (see [Data](#data-who-talks-to-the-assistant)). On the first message of a chat, the visitor's IP is located with ipwho.is in parallel with Gemini. DynamoDB or geolocation failures never break the reply.
 4. If the backend fails, the browser falls back to local keyword answers and logs a `console.warn`.
 
 ## Environment variables
@@ -20,7 +20,10 @@ Lambda `portfolio-chatbot-handler` + API Gateway + DynamoDB for the portfolio's 
 | `GEMINI_API_KEY` | yes | |
 | `GEMINI_MODEL` | no | `gemini-flash-latest` (alias that always points to the newest Flash) |
 | `ALLOWED_ORIGINS` | no | `*` (e.g. `https://fabianimv.github.io` to restrict CORS) |
-| `MESSAGES_TABLE` / `SESSIONS_TABLE` | no | `portfolio-chatbot-messages` / `portfolio-chatbot-sessions` |
+| `CHAT_TABLE` | no | `portfolio-chatbot` |
+| `GEO_LOOKUP` | no | on; `off` stops sending visitor IPs to ipwho.is |
+
+Function settings: **Timeout 30 s**, runtime Node.js 18+, and **no VPC** (or a VPC with a NAT gateway), since it calls Gemini and ipwho.is over the internet. The deploy workflow warns about these and fails if `GEMINI_API_KEY` is missing.
 
 ## Automatic deploys (GitHub Actions)
 
@@ -28,7 +31,7 @@ Lambda `portfolio-chatbot-handler` + API Gateway + DynamoDB for the portfolio's 
 
 - **Every PR** that touches the Lambda runs `node --check` and the unit tests (`npm test`).
 - **Every push to `main`** that touches the Lambda (or a manual run from the Actions tab) runs the tests, then:
-  1. checks the function runtime is Node.js 18+,
+  1. checks the function configuration: Node.js 18+, `GEMINI_API_KEY` present (fails otherwise), timeout and VPC (warnings),
   2. builds `index.js` + `package.json` + production `node_modules` into a zip,
   3. backs up the code currently deployed,
   4. updates the function code (environment variables such as `GEMINI_API_KEY` are never touched),
@@ -50,6 +53,40 @@ AWS access uses GitHub OIDC: no AWS keys are stored in GitHub. The role can only
 3. Actions → Deploy Chatbot Lambda → **Run workflow** to check it end to end.
 
 Until the variable exists, the deploy job is skipped and only the tests run.
+
+## Data: who talks to the assistant
+
+One table, **`portfolio-chatbot`**. Every visitor session is a group of items with the same `pk`:
+
+| pk | sk | type | What it holds |
+|---|---|---|---|
+| `SESSION#<id>` | `SESSION` | `session` | **Who and from where**: `visitorName`, `ip`, `location` (city, region, country), `country`, `network` (ISP or company, e.g. "Microsoft Corporation" = a bot in the cloud), `timezone`, `device`, `cameFrom` (external page that linked to the site), `firstSeenAt`, `lastSeenAt`, `messageCount`, `lastMessage` |
+| `SESSION#<id>` | `MSG#<time>#<rand>` | `message` | **One Q&A turn**: `createdAt`, `userMessage`, `botResponse`, `language`, `visitorName`, `ip`, `location`, `latencyMs`, `tokens`, `model` |
+
+- **All times are Chile time**, written as `2026-11-27 13:30:05`: readable and still sorted correctly.
+- Index **`sessions-by-last-seen`** (`type` + `lastSeenAt`) lists visitors newest first.
+
+### See it
+
+From `lambda/` (CloudShell works; run `npm ci` once):
+
+```bash
+node scripts/chats.js              # latest visitors: when, name, IP, location, network, messages
+node scripts/chats.js Camila       # full conversations by name (or by IP / sessionId)
+```
+
+In the console: DynamoDB → Tables → `portfolio-chatbot` → **Explore items** → *Query* → index `sessions-by-last-seen`, `type` = `session`, sort descending. Querying a session's `pk` shows its messages in order.
+
+### One-time setup
+
+```bash
+bash lambda/setup-dynamodb.sh                         # table + index + Lambda permission
+cd lambda && npm ci
+node scripts/migrate-old-tables.js --dry-run           # preview copying the old 2 tables
+node scripts/migrate-old-tables.js                     # copy (old tables are left untouched)
+```
+
+After checking the data, delete `portfolio-chatbot-messages` and `portfolio-chatbot-sessions` in the console. Names in the old data came from the old regex (e.g. "Tell me about"), so some aren't real names.
 
 ## Manual deploy
 
@@ -74,9 +111,7 @@ The assistant only answers from the `PROFILE` constant at the top of `index.js`.
 Logs are JSON lines (`request_ok`, `gemini_ok`, `gemini_error`, `rate_limited`, …) with latency and token usage, ready for CloudWatch Logs Insights:
 
 ```
-fields @timestamp, event, latencyMs, usage.totalTokenCount, status, error
-| filter event in ["request_ok", "gemini_error", "request_failed"]
+fields @timestamp, event, latencyMs, usage.totalTokenCount, status, error, cause
+| filter event in ["request_ok", "gemini_error", "request_failed", "dynamodb_write_failed", "geo_lookup_failed"]
 | sort @timestamp desc
 ```
-
-The `ver-*.sh` / `resumen-sesiones.sh` scripts still work to read conversations from DynamoDB.

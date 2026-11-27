@@ -381,6 +381,17 @@
         } catch (e) { /* storage blocked */ }
     }
 
+    // Approximate location (time zone) and the external page that linked here,
+    // so the owner can see where visitors come from. No third-party lookups.
+    function chatClientInfo() {
+        const info = {};
+        try { info.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { /* unsupported */ }
+        try {
+            if (document.referrer && new URL(document.referrer).origin !== location.origin) info.referrer = document.referrer;
+        } catch (e) { /* invalid referrer */ }
+        return info;
+    }
+
     // Returning visitors are greeted by name instead of being asked again
     function personalizeGreeting() {
         if (!chatState.visitorName) return;
@@ -504,7 +515,8 @@
                         visitorName: chatState.visitorName,
                         nameDeclined: chatState.nameDeclined,
                         lang: getLang(),
-                        history: chatState.history.slice(-12)
+                        history: chatState.history.slice(-12),
+                        client: chatClientInfo()
                     }),
                     signal: controller.signal
                 });

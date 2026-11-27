@@ -16,8 +16,16 @@ DynamoDBDocumentClient.prototype.send = async function (cmd) {
 };
 
 const geminiCalls = [];
+const geoCalls = [];
 let geminiQueue = [];
 global.fetch = async (url, opts) => {
+    if (url.startsWith('https://ipwho.is/')) {
+        geoCalls.push(url);
+        const body = url.includes('/0.0.0.0?')
+            ? { success: false, message: 'Invalid IP address' }
+            : { success: true, city: 'Santiago', region: 'Region Metropolitana', country: 'Chile', country_code: 'CL', connection: { org: 'Entel' } };
+        return { ok: true, status: 200, json: async () => body };
+    }
     geminiCalls.push({ url, opts, body: JSON.parse(opts.body) });
     const next = geminiQueue.shift();
     if (!next) throw new Error('unexpected Gemini call');
@@ -94,8 +102,86 @@ test('name given with history -> learned and stored in the sessions table', asyn
     assert.strictEqual(r.awaitingName, false);
     assert.deepStrictEqual(geminiCalls.at(-1).body.contents.map((x) => x.role), ['user', 'model', 'user']);
     const upd = ddbCalls.find((d) => d.name === 'UpdateCommand');
-    assert.strictEqual(upd.input.ExpressionAttributeValues[':name'], 'Ana');
-    assert.strictEqual(upd.input.Key.sessionId, 'abc12345-session');
+    assert.strictEqual(upd.input.TableName, 'portfolio-chatbot');
+    assert.deepStrictEqual(upd.input.Key, { pk: 'SESSION#abc12345-session', sk: 'SESSION' });
+    const names = Object.values(upd.input.ExpressionAttributeNames);
+    const values = Object.values(upd.input.ExpressionAttributeValues);
+    assert.ok(names.includes('visitorName') && values.includes('Ana'));
+    assert.ok(names.includes('ip') && names.includes('lastSeenAt') && names.includes('messageCount'));
+    assert.ok(values.includes('session'), 'session item is typed for the GSI');
+});
+
+test('message item: same session collection, ordered sort key, visitor data on the session', async () => {
+    geminiQueue.push(ok({ reply: 'Claro.', visitorName: 'Ana', nameDeclined: false, language: 'es' }));
+    await call({
+        ...ev({
+            message: '¿Proyectos?', sessionId: 'abc12345-session', visitorName: 'Ana',
+            client: { timezone: 'America/Santiago', referrer: 'https://www.linkedin.com/in/someone/?trk=abc' }
+        }, '200.1.2.3'),
+        headers: { 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0) Mobile/15E148' }
+    });
+    const put = ddbCalls.find((d) => d.name === 'PutCommand');
+    assert.strictEqual(put.input.Item.pk, 'SESSION#abc12345-session');
+    assert.match(put.input.Item.sk, /^MSG#\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}#[0-9a-f]{6}$/);
+    assert.match(put.input.Item.createdAt, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    assert.strictEqual(put.input.Item.location, 'Santiago, Region Metropolitana, Chile');
+    assert.strictEqual(put.input.Item.type, 'message');
+    assert.strictEqual(put.input.Item.userMessage, '¿Proyectos?');
+    assert.strictEqual(put.input.Item.botResponse, 'Claro.');
+    assert.strictEqual(put.input.Item.ip, '200.1.2.3');
+    assert.strictEqual(put.input.Item.tokens, 10);
+
+    const upd = ddbCalls.find((d) => d.name === 'UpdateCommand');
+    const map = {};
+    for (const [alias, name] of Object.entries(upd.input.ExpressionAttributeNames)) {
+        const v = alias.replace('#f', ':v');
+        map[name] = upd.input.ExpressionAttributeValues[v];
+    }
+    assert.strictEqual(map.timezone, 'America/Santiago');
+    assert.strictEqual(map.cameFrom, 'https://www.linkedin.com/in/someone/', 'query string stripped');
+    assert.strictEqual(map.device, 'mobile');
+    assert.strictEqual(map.ip, '200.1.2.3');
+    assert.strictEqual(map.location, 'Santiago, Region Metropolitana, Chile');
+    assert.strictEqual(map.country, 'CL');
+    assert.strictEqual(map.network, 'Entel');
+    assert.match(upd.input.UpdateExpression, /firstSeenAt\b|#f\d+ = if_not_exists\(#f\d+, :v\d+\)/);
+});
+
+test('geolocation: once per new chat, cached, skipped for private IPs and failures', async () => {
+    geoCalls.length = 0;
+    geminiQueue.push(ok({ reply: 'a', visitorName: 'Leo', nameDeclined: false, language: 'es' }));
+    await call(ev({ message: 'hola', visitorName: 'Leo' }, '201.2.3.4'));
+    assert.strictEqual(geoCalls.length, 1);
+
+    // Same chat continues (history present): no lookup
+    geminiQueue.push(ok({ reply: 'b', visitorName: 'Leo', nameDeclined: false, language: 'es' }));
+    await call(ev({ message: 'y?', visitorName: 'Leo', history: [{ role: 'user', text: 'hola' }, { role: 'assistant', text: 'a' }] }, '201.2.3.4'));
+    assert.strictEqual(geoCalls.length, 1);
+
+    // New chat from the same IP: served from cache
+    assert.deepStrictEqual(await _internals.lookupLocation('201.2.3.4'), { location: 'Santiago, Region Metropolitana, Chile', country: 'CL', network: 'Entel' });
+    assert.strictEqual(geoCalls.length, 1);
+
+    assert.strictEqual(await _internals.lookupLocation('192.168.1.10'), null);
+    assert.strictEqual(await _internals.lookupLocation('0.0.0.0'), null);
+});
+
+test('chileTime is readable and sortable', () => {
+    assert.strictEqual(_internals.chileTime(new Date('2026-11-27T16:30:05Z')), '2026-11-27 13:30:05');
+    assert.ok(_internals.chileTime(new Date('2026-01-01T00:00:00Z')) < _internals.chileTime(new Date('2026-01-02T00:00:00Z')));
+});
+
+test('clientInfo rejects junk', () => {
+    const info = _internals.clientInfo({ client: { timezone: 'x; DROP TABLE', referrer: 'javascript:alert(1)' } }, { headers: {} });
+    assert.strictEqual(info.timezone, undefined);
+    assert.strictEqual(info.referrer, undefined);
+    assert.strictEqual(info.device, undefined);
+});
+
+test('buildSet skips empty values and aliases every attribute name', () => {
+    const s = _internals.buildSet({ type: { value: 'session' }, visitorName: { value: null }, n: { value: 1, mode: 'add' } });
+    assert.strictEqual(s.UpdateExpression, 'SET #f0 = :v0, #f1 = if_not_exists(#f1, :z1) + :v1');
+    assert.deepStrictEqual(s.ExpressionAttributeNames, { '#f0': 'type', '#f1': 'n' });
 });
 
 test('known name drops the gate and markdown is stripped', async () => {
@@ -180,6 +266,7 @@ test('invalid sessionId falls back to a hashed IP', async () => {
     await call(ev({ message: 'hi', sessionId: '../../etc', visitorName: 'Leo' }));
     const put = ddbCalls.find((d) => d.name === 'PutCommand');
     assert.match(put.input.Item.sessionId, /^ip-[0-9a-f]{16}$/);
+    assert.match(put.input.Item.pk, /^SESSION#ip-[0-9a-f]{16}$/);
 });
 
 test('rate limit per IP', async () => {

@@ -24,7 +24,7 @@
  * - GEMINI_API_KEY   (required)
  * - GEMINI_MODEL     (optional, default "gemini-flash-latest")
  * - ALLOWED_ORIGINS  (optional, comma-separated; default "*")
- * - MESSAGES_TABLE / SESSIONS_TABLE (optional, defaults match the existing tables)
+ * - CHAT_TABLE      (optional, default "portfolio-chatbot"; see the DynamoDB section)
  *
  * Runtime: Node.js 18+ (uses the built-in fetch). AWS SDK v3 ships with the runtime.
  */
@@ -37,8 +37,7 @@ const { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand } = requir
 
 const CONFIG = {
     model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
-    messagesTable: process.env.MESSAGES_TABLE || 'portfolio-chatbot-messages',
-    sessionsTable: process.env.SESSIONS_TABLE || 'portfolio-chatbot-sessions',
+    table: process.env.CHAT_TABLE || 'portfolio-chatbot',
     allowedOrigins: (process.env.ALLOWED_ORIGINS || '*').split(',').map((s) => s.trim()).filter(Boolean),
     maxMessageChars: 500,
     maxHistoryTurns: 12,       // user + assistant messages sent back by the browser
@@ -46,10 +45,24 @@ const CONFIG = {
     maxReplyChars: 1500,
     rateLimitPerMinute: 15,    // per IP, per warm Lambda container
     geminiTimeoutMs: 20000,
-    geminiAttempts: 2
+    geminiAttempts: 2,
+    // IP -> city/country/ISP via ipwho.is (HTTPS, no key), once per new chat. GEO_LOOKUP=off disables it.
+    geoLookup: process.env.GEO_LOOKUP !== 'off',
+    geoTimeoutMs: 2500,
+    timeZone: 'America/Santiago'
 };
 
-const dynamodb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' }));
+// "2026-11-27 13:30:05" in Chile time: readable in the DynamoDB console and still sortable
+const chileTime = (date = new Date()) =>
+    new Intl.DateTimeFormat('sv-SE', {
+        timeZone: CONFIG.timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    }).format(date);
+
+const dynamodb = DynamoDBDocumentClient.from(
+    new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' }),
+    { marshallOptions: { removeUndefinedValues: true } }
+);
 
 // ============================================================
 // PROFILE — single source of truth the model answers from.
@@ -307,7 +320,13 @@ async function callGemini({ systemPrompt, contents, apiKey, deadline }) {
             lastError = err;
             const status = err.status;
             const retryable = !status || status === 429 || status >= 500;
-            log('warn', 'gemini_error', { attempt, status, error: err.message, retryable });
+            log('warn', 'gemini_error', {
+                attempt, status, retryable,
+                error: err.message,
+                // Network failures hide the real reason here (ENOTFOUND, ETIMEDOUT, TimeoutError…)
+                cause: err.name === 'TimeoutError' ? `no response within ${Date.now() - started} ms` : (err.cause?.code || err.cause?.message),
+                elapsedMs: Date.now() - started
+            });
             if (!retryable) break;
             if (attempt < CONFIG.geminiAttempts) await sleep(700 * attempt);
         }
@@ -343,11 +362,49 @@ function parseGemini(data) {
 }
 
 // ============================================================
-// DynamoDB (best effort: never fails the request)
+// DynamoDB — one table, best effort (never fails the request)
+//
+// Table `portfolio-chatbot` (pk + sk), one item collection per visitor session:
+//   pk = SESSION#<sessionId>, sk = SESSION                → type "session": who, from where, when
+//   pk = SESSION#<sessionId>, sk = MSG#<iso time>#<rand>  → type "message": one Q&A turn
+// GSI `sessions-by-last-seen` (type + lastSeenAt) lists visitors, newest first.
+// Only session items have lastSeenAt, so messages stay out of the index.
 // ============================================================
+const sessionKey = (sessionId) => ({ pk: `SESSION#${sessionId}`, sk: 'SESSION' });
+
+// ---- IP geolocation (best effort, cached per warm container) ----
+const geoCache = new Map();
+const PRIVATE_IP = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|fc|fd|fe80)/i;
+
+async function lookupLocation(ip) {
+    if (!CONFIG.geoLookup || !ip || ip === 'unknown' || PRIVATE_IP.test(ip)) return null;
+    if (geoCache.has(ip)) return geoCache.get(ip);
+    try {
+        const res = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}?fields=success,message,city,region,country,country_code,connection`, {
+            signal: AbortSignal.timeout(CONFIG.geoTimeoutMs)
+        });
+        const d = await res.json();
+        if (!d.success) {
+            log('warn', 'geo_lookup_failed', { reason: d.message });
+            return null;
+        }
+        const geo = {
+            location: [d.city, d.region, d.country].filter(Boolean).join(', ') || undefined,
+            country: d.country_code || undefined,
+            network: d.connection?.org || d.connection?.isp || undefined
+        };
+        if (geoCache.size > 500) geoCache.clear();
+        geoCache.set(ip, geo);
+        return geo;
+    } catch (err) {
+        log('warn', 'geo_lookup_failed', { reason: err.name === 'TimeoutError' ? 'timeout' : err.message });
+        return null;
+    }
+}
+
 async function getStoredName(sessionId) {
     try {
-        const res = await dynamodb.send(new GetCommand({ TableName: CONFIG.sessionsTable, Key: { sessionId } }));
+        const res = await dynamodb.send(new GetCommand({ TableName: CONFIG.table, Key: sessionKey(sessionId) }));
         return { visitorName: sanitizeName(res.Item?.visitorName), nameDeclined: res.Item?.nameDeclined === true };
     } catch (err) {
         log('warn', 'session_get_failed', { error: err.message });
@@ -355,44 +412,100 @@ async function getStoredName(sessionId) {
     }
 }
 
-async function persist({ sessionId, ip, message, response, language, visitorName, nameDeclined, requestId, latencyMs, awaitingName }) {
-    const now = new Date();
-    const writes = [
-        dynamodb.send(new PutCommand({
-            TableName: CONFIG.messagesTable,
-            Item: {
-                messageId: `${now.getTime()}-${crypto.randomBytes(4).toString('hex')}`,
-                sessionId,
-                ipAddress: ip,
-                timestamp: now.toISOString(),
-                createdAt: Math.floor(now.getTime() / 1000),
-                userMessage: message,
-                botResponse: response,
-                language,
-                visitorName: visitorName || null,
-                awaitingName,
-                model: CONFIG.model,
-                latencyMs,
-                requestId
+// Builds "SET #a = :a, #b = if_not_exists(#b, :b)" with every attribute name aliased
+// (DynamoDB has hundreds of reserved words: type, language, timezone...)
+function buildSet(fields) {
+    const names = {};
+    const values = {};
+    const parts = Object.entries(fields)
+        .filter(([, f]) => f.value !== undefined && f.value !== null && f.value !== '')
+        .map(([key, f], i) => {
+            names[`#f${i}`] = key;
+            values[`:v${i}`] = f.value;
+            if (f.mode === 'ifMissing') return `#f${i} = if_not_exists(#f${i}, :v${i})`;
+            if (f.mode === 'add') {
+                values[`:z${i}`] = 0;
+                return `#f${i} = if_not_exists(#f${i}, :z${i}) + :v${i}`;
             }
-        })),
-        dynamodb.send(new UpdateCommand({
-            TableName: CONFIG.sessionsTable,
-            Key: { sessionId },
-            UpdateExpression: 'SET messageCount = if_not_exists(messageCount, :zero) + :one, updatedAt = :now, createdAt = if_not_exists(createdAt, :now), ipAddress = :ip'
-                + (visitorName ? ', visitorName = :name' : '')
-                + (nameDeclined ? ', nameDeclined = :declined' : ''),
-            ExpressionAttributeValues: {
-                ':zero': 0, ':one': 1, ':now': now.toISOString(), ':ip': ip,
-                ...(visitorName ? { ':name': visitorName } : {}),
-                ...(nameDeclined ? { ':declined': true } : {})
-            }
-        }))
-    ];
-    const results = await Promise.allSettled(writes);
-    results.forEach((r, i) => {
-        if (r.status === 'rejected') log('warn', 'dynamodb_write_failed', { table: i === 0 ? 'messages' : 'sessions', error: r.reason?.message });
+            return `#f${i} = :v${i}`;
+        });
+    return { UpdateExpression: 'SET ' + parts.join(', '), ExpressionAttributeNames: names, ExpressionAttributeValues: values };
+}
+
+async function persist(t) {
+    const now = chileTime();
+    const key = sessionKey(t.sessionId);
+    const geo = t.geo || {};
+
+    const message = {
+        ...key,
+        sk: `MSG#${now}#${crypto.randomBytes(3).toString('hex')}`,
+        type: 'message',
+        sessionId: t.sessionId,
+        createdAt: now,
+        visitorName: t.visitorName || undefined,
+        ip: t.ip,
+        location: geo.location,
+        userMessage: t.message,
+        botResponse: t.response,
+        language: t.language,
+        awaitingName: t.awaitingName,
+        model: CONFIG.model,
+        latencyMs: t.latencyMs,
+        tokens: t.usage?.totalTokenCount,
+        requestId: t.requestId
+    };
+
+    const session = buildSet({
+        type: { value: 'session' },
+        sessionId: { value: t.sessionId },
+        firstSeenAt: { value: now, mode: 'ifMissing' },
+        lastSeenAt: { value: now },
+        messageCount: { value: 1, mode: 'add' },
+        visitorName: { value: t.visitorName },
+        nameDeclined: { value: t.nameDeclined || undefined },
+        ip: { value: t.ip },
+        location: { value: geo.location },
+        country: { value: geo.country },
+        network: { value: geo.network },
+        timezone: { value: t.client.timezone },
+        device: { value: t.client.device },
+        userAgent: { value: t.client.userAgent },
+        cameFrom: { value: t.client.referrer, mode: 'ifMissing' },
+        siteLanguage: { value: t.pageLang },
+        lastLanguage: { value: t.language },
+        lastMessage: { value: t.message.slice(0, 200) }
     });
+
+    const results = await Promise.allSettled([
+        dynamodb.send(new PutCommand({ TableName: CONFIG.table, Item: message, ConditionExpression: 'attribute_not_exists(sk)' })),
+        dynamodb.send(new UpdateCommand({ TableName: CONFIG.table, Key: key, ...session }))
+    ]);
+    results.forEach((r, i) => {
+        if (r.status === 'rejected') log('warn', 'dynamodb_write_failed', { item: i === 0 ? 'message' : 'session', error: r.reason?.message });
+    });
+}
+
+// What the browser and API Gateway tell us about the visitor (no third parties involved)
+function clientInfo(body, event) {
+    const h = event.headers || {};
+    const ua = String(h['user-agent'] || h['User-Agent'] || '').slice(0, 300);
+    const c = body.client && typeof body.client === 'object' ? body.client : {};
+
+    const timezone = typeof c.timezone === 'string' && /^[A-Za-z0-9_+-]+(\/[A-Za-z0-9_+-]+){0,2}$/.test(c.timezone) && c.timezone.length <= 64
+        ? c.timezone : undefined;
+
+    // Keep only origin + path of the page that linked here (no query strings or tokens)
+    let referrer;
+    if (typeof c.referrer === 'string' && c.referrer.length <= 500) {
+        try {
+            const u = new URL(c.referrer);
+            if (u.protocol === 'https:' || u.protocol === 'http:') referrer = (u.origin + u.pathname).slice(0, 200);
+        } catch { /* not a URL */ }
+    }
+
+    const device = !ua ? undefined : /iPad|Tablet/i.test(ua) ? 'tablet' : /Mobi|Android|iPhone/i.test(ua) ? 'mobile' : 'desktop';
+    return { timezone, referrer, device, userAgent: ua || undefined };
 }
 
 const FALLBACK_REPLY = {
@@ -448,13 +561,20 @@ exports.handler = async (event, context) => {
         ({ visitorName, nameDeclined } = await getStoredName(sessionId));
     }
 
+    // First message of a chat on screen: locate the IP while Gemini thinks
+    const isNewChat = !Array.isArray(body.history) || body.history.length === 0;
+    const geoPromise = isNewChat ? lookupLocation(ip) : Promise.resolve(null);
+
     const systemPrompt = buildSystemPrompt({ visitorName, nameDeclined, pageLang });
     const contents = toContents(body.history, message);
     const deadline = started + (context?.getRemainingTimeInMillis ? context.getRemainingTimeInMillis() : 28000) - 1000;
 
     let result;
+    let usage;
     try {
-        result = parseGemini(await callGemini({ systemPrompt, contents, apiKey, deadline }));
+        const data = await callGemini({ systemPrompt, contents, apiKey, deadline });
+        usage = data.usageMetadata;
+        result = parseGemini(data);
     } catch (err) {
         log('error', 'request_failed', { requestId, status: err.status, error: err.message, latencyMs: Date.now() - started });
         return reply(502, headers, { error: 'Assistant temporarily unavailable', requestId });
@@ -472,8 +592,9 @@ exports.handler = async (event, context) => {
     const latencyMs = Date.now() - started;
 
     await persist({
-        sessionId, ip, message, response: result.reply, language,
-        visitorName: finalName, nameDeclined: finalDeclined, requestId, latencyMs, awaitingName
+        sessionId, ip, message, response: result.reply, language, pageLang,
+        visitorName: finalName, nameDeclined: finalDeclined, requestId, latencyMs, awaitingName,
+        usage, client: clientInfo(body, event), geo: await geoPromise
     });
 
     log('info', 'request_ok', {
@@ -491,4 +612,4 @@ exports.handler = async (event, context) => {
 };
 
 // Exposed for local tests
-exports._internals = { toContents, cleanReply, sanitizeName, parseGemini, buildSystemPrompt };
+exports._internals = { toContents, cleanReply, sanitizeName, parseGemini, buildSystemPrompt, buildSet, clientInfo, chileTime, lookupLocation };
