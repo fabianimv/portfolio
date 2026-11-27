@@ -86,14 +86,30 @@ jobs:
           role-to-assume: ${{ vars.AWS_LAMBDA_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Check runtime supports the code
+      # Catches the configuration problems that make the chat silently fall back to
+      # local answers. Never prints the key, only whether it exists.
+      - name: Check function configuration
         run: |
-          RUNTIME=$(aws lambda get-function-configuration --function-name "$FUNCTION_NAME" --query Runtime --output text)
-          echo "Runtime: $RUNTIME"
+          CFG=$(aws lambda get-function-configuration --function-name "$FUNCTION_NAME" \
+            --query '{runtime: Runtime, timeout: Timeout, hasKey: contains(keys(Environment.Variables || `{}`), `GEMINI_API_KEY`), vpc: VpcConfig.VpcId}' \
+            --output json)
+          echo "$CFG" | jq .
+          RUNTIME=$(echo "$CFG" | jq -r .runtime)
           case "$RUNTIME" in
             nodejs18.x|nodejs2[0-9].x) ;;
             *) echo "::error::$FUNCTION_NAME runs on $RUNTIME; the handler needs Node.js 18 or newer (built-in fetch)."; exit 1 ;;
           esac
+          if [ "$(echo "$CFG" | jq -r .hasKey)" != "true" ]; then
+            echo "::error::GEMINI_API_KEY is not set on $FUNCTION_NAME (Configuration → Environment variables). The chat can't answer without it."
+            exit 1
+          fi
+          if [ "$(echo "$CFG" | jq -r .timeout)" -lt 25 ]; then
+            echo "::warning::Timeout is $(echo "$CFG" | jq -r .timeout)s; set it to 30s (Configuration → General configuration) so Gemini has time to answer."
+          fi
+          VPC=$(echo "$CFG" | jq -r '.vpc // empty')
+          if [ -n "$VPC" ]; then
+            echo "::warning::$FUNCTION_NAME is attached to $VPC. Without a NAT gateway it can't reach Gemini or ipwho.is; remove the VPC unless you need it."
+          fi
 
       - name: Build package
         working-directory: lambda
