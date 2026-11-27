@@ -9,9 +9,11 @@ const { DynamoDBDocumentClient } = require('@aws-sdk/lib-dynamodb');
 // ---- mocks (set up before loading the handler) ----
 const ddbCalls = [];
 let storedSession = null;
+let queryResponse = () => ({ Items: [] });
 DynamoDBDocumentClient.prototype.send = async function (cmd) {
     ddbCalls.push({ name: cmd.constructor.name, input: cmd.input });
     if (cmd.constructor.name === 'GetCommand') return { Item: storedSession };
+    if (cmd.constructor.name === 'QueryCommand') return queryResponse(cmd.input);
     return {};
 };
 
@@ -306,5 +308,93 @@ test('missing API key returns 500 without calling Gemini', async () => {
         assert.strictEqual(geminiCalls.length, before);
     } finally {
         process.env.GEMINI_API_KEY = key;
+    }
+});
+
+// ---------------- Admin API ----------------
+const admin = (body, ip = '9.9.9.1') => call(ev({ admin: body }, ip));
+
+test('admin API is disabled (404) when ADMIN_TOKEN is not set', async () => {
+    delete process.env.ADMIN_TOKEN;
+    const r = await admin({ token: 'anything', action: 'visitors' });
+    assert.strictEqual(r.status, 404);
+    assert.ok(!ddbCalls.some((d) => d.name === 'QueryCommand'));
+});
+
+test('admin API rejects a wrong or missing token without reading the table', async () => {
+    process.env.ADMIN_TOKEN = 'correct-horse-battery-staple';
+    try {
+        assert.strictEqual((await admin({ token: 'wrong', action: 'visitors' }, '9.9.9.2')).status, 401);
+        assert.strictEqual((await admin({ action: 'visitors' }, '9.9.9.2')).status, 401);
+        assert.strictEqual((await admin('just-a-string', '9.9.9.2')).status, 401);
+        assert.ok(!ddbCalls.some((d) => d.name === 'QueryCommand'));
+    } finally {
+        delete process.env.ADMIN_TOKEN;
+    }
+});
+
+test('admin visitors: newest first from the index, only whitelisted fields, cursor round-trip', async () => {
+    process.env.ADMIN_TOKEN = 'secret-token';
+    const lastKey = { pk: 'SESSION#abc', sk: 'SESSION', type: 'session', lastSeenAt: '2026-11-27 13:00:00' };
+    queryResponse = () => ({
+        Items: [{ pk: 'SESSION#abc', sk: 'SESSION', type: 'session', sessionId: 'abc', visitorName: 'Camila', ip: '190.1.1.1', location: 'Santiago, Chile', lastSeenAt: '2026-11-27 13:00:00', messageCount: 3, userAgent: 'secret UA' }],
+        LastEvaluatedKey: lastKey
+    });
+    try {
+        const r = await admin({ token: 'secret-token', action: 'visitors', limit: 5000 }, '9.9.9.3');
+        assert.strictEqual(r.status, 200);
+        const q = ddbCalls.find((d) => d.name === 'QueryCommand').input;
+        assert.strictEqual(q.IndexName, 'sessions-by-last-seen');
+        assert.strictEqual(q.ScanIndexForward, false);
+        assert.strictEqual(q.Limit, 300, 'limit is capped');
+        assert.deepStrictEqual(r.visitors[0], { sessionId: 'abc', visitorName: 'Camila', ip: '190.1.1.1', location: 'Santiago, Chile', lastSeenAt: '2026-11-27 13:00:00', messageCount: 3 });
+        assert.ok(r.nextCursor);
+
+        ddbCalls.length = 0;
+        await admin({ token: 'secret-token', action: 'visitors', cursor: r.nextCursor }, '9.9.9.3');
+        assert.deepStrictEqual(ddbCalls.find((d) => d.name === 'QueryCommand').input.ExclusiveStartKey, lastKey);
+
+        ddbCalls.length = 0;
+        await admin({ token: 'secret-token', action: 'visitors', cursor: Buffer.from('{"evil":1}').toString('base64url') }, '9.9.9.3');
+        assert.strictEqual(ddbCalls.find((d) => d.name === 'QueryCommand').input.ExclusiveStartKey, undefined, 'bad cursor ignored');
+    } finally {
+        queryResponse = () => ({ Items: [] });
+        delete process.env.ADMIN_TOKEN;
+    }
+});
+
+test('admin conversation: session + messages in order; validates sessionId', async () => {
+    process.env.ADMIN_TOKEN = 'secret-token';
+    queryResponse = (input) => {
+        assert.strictEqual(input.ExpressionAttributeValues[':pk'], 'SESSION#MTkwLjEuMi4z');
+        return { Items: [
+            { pk: 'SESSION#MTkwLjEuMi4z', sk: 'MSG#2026-11-27 13:00:00#aaa', type: 'message', createdAt: '2026-11-27 13:00:00', userMessage: 'hola', botResponse: '¿nombre?', requestId: 'x' },
+            { pk: 'SESSION#MTkwLjEuMi4z', sk: 'MSG#2026-11-27 13:01:00#bbb', type: 'message', createdAt: '2026-11-27 13:01:00', userMessage: 'Camila', botResponse: 'Hola Camila' },
+            { pk: 'SESSION#MTkwLjEuMi4z', sk: 'SESSION', type: 'session', sessionId: 'MTkwLjEuMi4z', visitorName: 'Camila' }
+        ] };
+    };
+    try {
+        const r = await admin({ token: 'secret-token', action: 'conversation', sessionId: 'MTkwLjEuMi4z' }, '9.9.9.4');
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(r.session.visitorName, 'Camila');
+        assert.deepStrictEqual(r.messages.map((m) => m.userMessage), ['hola', 'Camila']);
+        assert.strictEqual(r.messages[0].requestId, undefined, 'internal fields not exposed');
+
+        assert.strictEqual((await admin({ token: 'secret-token', action: 'conversation', sessionId: 'x"; DROP' }, '9.9.9.4')).status, 400);
+        assert.strictEqual((await admin({ token: 'secret-token', action: 'nope' }, '9.9.9.4')).status, 400);
+    } finally {
+        queryResponse = () => ({ Items: [] });
+        delete process.env.ADMIN_TOKEN;
+    }
+});
+
+test('admin API is rate limited per IP', async () => {
+    process.env.ADMIN_TOKEN = 'secret-token';
+    try {
+        let last;
+        for (let i = 0; i < 31; i++) last = await admin({ token: 'secret-token', action: 'visitors' }, '9.9.9.5');
+        assert.strictEqual(last.status, 429);
+    } finally {
+        delete process.env.ADMIN_TOKEN;
     }
 });

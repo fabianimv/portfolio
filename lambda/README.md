@@ -21,6 +21,7 @@ Lambda `portfolio-chatbot-handler` + API Gateway + DynamoDB for the portfolio's 
 | `GEMINI_MODEL` | no | `gemini-flash-latest` (alias that always points to the newest Flash) |
 | `ALLOWED_ORIGINS` | no | `*` (e.g. `https://fabianimv.github.io` to restrict CORS) |
 | `CHAT_TABLE` | no | `portfolio-chatbot` |
+| `ADMIN_TOKEN` | no | unset = private dashboard disabled (see [Private dashboard](#private-dashboard-adminhtml)) |
 | `GEO_LOOKUP` | no | on; `off` stops sending visitor IPs to ipwho.is |
 
 Function settings: **Timeout 30 s**, runtime **Node.js 24.x**, and **no VPC** (or a VPC with a NAT gateway), since it calls Gemini and ipwho.is over the internet. The deploy workflow warns about these and fails if `GEMINI_API_KEY` is missing.
@@ -66,7 +67,21 @@ One table, **`portfolio-chatbot`**. Every visitor session is a group of items wi
 - **All times are Chile time**, written as `2026-11-27 13:30:05`: readable and still sorted correctly.
 - Index **`sessions-by-last-seen`** (`type` + `lastSeenAt`) lists visitors newest first.
 
-### See it
+### Private dashboard (`admin.html`)
+
+`https://fabianimv.github.io/portfolio/admin.html`: latest visitors with name, city/country, network (cloud networks are flagged as probable bots), messages, the page they came from and their last question; click one to read the whole conversation. Search, period filter and "hide bots" included. Works on mobile.
+
+- Not linked from the site and marked `noindex`. The page itself holds no data: it asks the Lambda, which answers only with the right **admin token** (same endpoint as the chat, `POST { admin: { token, action } }`, constant-time check, 30 requests/min per IP).
+- Visitor text is always rendered as text, never as HTML.
+- To enable it, create a long random token and add it to the function as the environment variable **`ADMIN_TOKEN`** (Configuration → Environment variables):
+
+  ```bash
+  openssl rand -hex 24
+  ```
+
+  Without `ADMIN_TOKEN` the admin API answers 404. Change the token any time to log every browser out.
+
+### From the terminal
 
 From `lambda/` (CloudShell works; run `npm ci` once):
 

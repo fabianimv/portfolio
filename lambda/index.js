@@ -23,6 +23,7 @@
  * Environment variables:
  * - GEMINI_API_KEY   (required)
  * - GEMINI_MODEL     (optional, default "gemini-flash-latest")
+ * - ADMIN_TOKEN      (optional; enables the private visitors dashboard API, see admin.html)
  * - ALLOWED_ORIGINS  (optional, comma-separated; default "*")
  * - CHAT_TABLE      (optional, default "portfolio-chatbot"; see the DynamoDB section)
  *
@@ -39,7 +40,7 @@ const dns = require('dns');
 // gives up. Resolving IPv4 first fixes it on any runtime (Node 20+ also races both).
 dns.setDefaultResultOrder('ipv4first');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
+const { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
 
 const CONFIG = {
     model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
@@ -50,6 +51,7 @@ const CONFIG = {
     maxHistoryItemChars: 1500,
     maxReplyChars: 1500,
     rateLimitPerMinute: 15,    // per IP, per warm Lambda container
+    adminRateLimitPerMinute: 30,
     geminiTimeoutMs: 20000,
     geminiAttempts: 2,
     // IP -> city/country/ISP via ipwho.is (HTTPS, no key), once per new chat. GEO_LOOKUP=off disables it.
@@ -266,7 +268,7 @@ function cleanReply(text) {
 // also set throttling on the API Gateway stage.
 // ============================================================
 const hits = new Map();
-function isRateLimited(key) {
+function isRateLimited(key, limit = CONFIG.rateLimitPerMinute) {
     const now = Date.now();
     const recent = (hits.get(key) || []).filter((t) => now - t < 60000);
     recent.push(now);
@@ -274,7 +276,7 @@ function isRateLimited(key) {
     if (hits.size > 2000) {
         for (const [k, times] of hits) if (times.every((t) => now - t >= 60000)) hits.delete(k);
     }
-    return recent.length > CONFIG.rateLimitPerMinute;
+    return recent.length > limit;
 }
 
 // ============================================================
@@ -523,6 +525,103 @@ const FALLBACK_REPLY = {
 };
 
 // ============================================================
+// Admin API for the private dashboard (admin.html)
+// Same endpoint as the chat: POST { admin: { token, action, ... } }.
+// Disabled (404) unless ADMIN_TOKEN is set on the function.
+// ============================================================
+const SESSION_FIELDS = [
+    'sessionId', 'visitorName', 'nameDeclined', 'ip', 'location', 'country', 'network',
+    'timezone', 'device', 'cameFrom', 'firstSeenAt', 'lastSeenAt', 'messageCount',
+    'lastMessage', 'lastLanguage', 'siteLanguage', 'migratedFrom'
+];
+const MESSAGE_FIELDS = ['createdAt', 'userMessage', 'botResponse', 'language', 'location', 'latencyMs', 'awaitingName'];
+const pick = (item, fields) => Object.fromEntries(fields.filter((f) => item[f] !== undefined && item[f] !== null).map((f) => [f, item[f]]));
+
+function adminTokenMatches(given) {
+    const expected = process.env.ADMIN_TOKEN;
+    if (!expected || typeof given !== 'string' || !given) return false;
+    // Hash both sides so the comparison is constant-time regardless of length
+    const a = crypto.createHash('sha256').update(given).digest();
+    const b = crypto.createHash('sha256').update(expected).digest();
+    return crypto.timingSafeEqual(a, b);
+}
+
+const encodeCursor = (key) => (key ? Buffer.from(JSON.stringify(key)).toString('base64url') : null);
+function decodeCursor(cursor) {
+    if (typeof cursor !== 'string' || cursor.length > 1000) return undefined;
+    try {
+        const key = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+        const allowed = ['pk', 'sk', 'type', 'lastSeenAt'];
+        const ok = key && typeof key === 'object' && Object.entries(key).every(([k, v]) => allowed.includes(k) && typeof v === 'string');
+        return ok ? key : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+async function handleAdmin(req, headers, ip, requestId) {
+    if (!process.env.ADMIN_TOKEN) return reply(404, headers, { error: 'Not found' });
+    if (isRateLimited('admin:' + ip, CONFIG.adminRateLimitPerMinute)) {
+        return reply(429, headers, { error: 'Too many requests, wait a minute' });
+    }
+    if (!req || typeof req !== 'object' || !adminTokenMatches(req.token)) {
+        log('warn', 'admin_denied', { requestId });
+        await sleep(400);
+        return reply(401, headers, { error: 'Unauthorized' });
+    }
+
+    try {
+        if (req.action === 'visitors') {
+            const limit = Math.min(Math.max(Number(req.limit) || 100, 1), 300);
+            const res = await dynamodb.send(new QueryCommand({
+                TableName: CONFIG.table,
+                IndexName: 'sessions-by-last-seen',
+                KeyConditionExpression: '#t = :s',
+                ExpressionAttributeNames: { '#t': 'type' },
+                ExpressionAttributeValues: { ':s': 'session' },
+                ScanIndexForward: false,
+                Limit: limit,
+                ExclusiveStartKey: decodeCursor(req.cursor)
+            }));
+            log('info', 'admin_visitors', { requestId, count: res.Items?.length || 0 });
+            return reply(200, headers, {
+                visitors: (res.Items || []).map((i) => pick(i, SESSION_FIELDS)),
+                nextCursor: encodeCursor(res.LastEvaluatedKey)
+            });
+        }
+
+        if (req.action === 'conversation') {
+            const sessionId = req.sessionId;
+            // New ids are UUIDs; migrated ones are base64 strings (+ / =)
+            if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_+/=-]{1,100}$/.test(sessionId)) {
+                return reply(400, headers, { error: 'Invalid sessionId' });
+            }
+            const items = [];
+            let ExclusiveStartKey;
+            do {
+                const res = await dynamodb.send(new QueryCommand({
+                    TableName: CONFIG.table,
+                    KeyConditionExpression: 'pk = :pk',
+                    ExpressionAttributeValues: { ':pk': `SESSION#${sessionId}` },
+                    ExclusiveStartKey
+                }));
+                items.push(...(res.Items || []));
+                ExclusiveStartKey = res.LastEvaluatedKey;
+            } while (ExclusiveStartKey && items.length < 1000);
+            const session = items.find((i) => i.sk === 'SESSION');
+            const messages = items.filter((i) => typeof i.sk === 'string' && i.sk.startsWith('MSG#')).map((i) => pick(i, MESSAGE_FIELDS));
+            log('info', 'admin_conversation', { requestId, messages: messages.length });
+            return reply(200, headers, { session: session ? pick(session, SESSION_FIELDS) : null, messages });
+        }
+
+        return reply(400, headers, { error: 'Unknown action' });
+    } catch (err) {
+        log('error', 'admin_failed', { requestId, error: err.message });
+        return reply(500, headers, { error: 'Could not read the table' });
+    }
+}
+
+// ============================================================
 // Handler
 // ============================================================
 exports.handler = async (event, context) => {
@@ -540,6 +639,8 @@ exports.handler = async (event, context) => {
     } catch {
         return reply(400, headers, { error: 'Invalid JSON body' });
     }
+
+    if (body && body.admin !== undefined) return handleAdmin(body.admin, headers, ip, requestId);
 
     const message = typeof body.message === 'string' ? body.message.trim() : '';
     const pageLang = body.lang === 'en' ? 'en' : 'es';
