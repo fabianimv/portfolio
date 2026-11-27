@@ -1,0 +1,157 @@
+# .github/workflows/deploy-lambda.yml
+# Tests the chatbot Lambda on every PR that touches it, and deploys it to
+# AWS on pushes to main. AWS access uses GitHub OIDC (no stored AWS keys):
+# see lambda/README.md -> "Automatic deploys" for the one-time setup.
+name: Deploy Chatbot Lambda
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'lambda/index.js'
+      - 'lambda/package.json'
+      - 'lambda/package-lock.json'
+      - 'lambda/test/**'
+      - '.github/workflows/deploy-lambda.yml'
+  pull_request:
+    paths:
+      - 'lambda/index.js'
+      - 'lambda/package.json'
+      - 'lambda/package-lock.json'
+      - 'lambda/test/**'
+      - '.github/workflows/deploy-lambda.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lambda-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FUNCTION_NAME: portfolio-chatbot-handler
+  AWS_REGION: us-east-1
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lambda
+    steps:
+      - name: Checkout 🛎️
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: lambda/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Syntax check
+        run: node --check index.js
+
+      - name: Unit tests
+        run: npm test
+
+  deploy:
+    name: Deploy
+    needs: test
+    # Only from main, and only once the deploy role is configured as a repo variable
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AWS_LAMBDA_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout 🛎️
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: lambda/package-lock.json
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_LAMBDA_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check runtime supports the code
+        run: |
+          RUNTIME=$(aws lambda get-function-configuration --function-name "$FUNCTION_NAME" --query Runtime --output text)
+          echo "Runtime: $RUNTIME"
+          case "$RUNTIME" in
+            nodejs18.x|nodejs2[0-9].x) ;;
+            *) echo "::error::$FUNCTION_NAME runs on $RUNTIME; the handler needs Node.js 18 or newer (built-in fetch)."; exit 1 ;;
+          esac
+
+      - name: Build package
+        working-directory: lambda
+        run: |
+          npm ci --omit=dev --no-audit --no-fund
+          zip -qr ../function.zip index.js package.json node_modules
+          ls -lh ../function.zip
+
+      - name: Back up current code
+        id: backup
+        run: |
+          URL=$(aws lambda get-function --function-name "$FUNCTION_NAME" --query Code.Location --output text)
+          curl -sSfL "$URL" -o previous.zip
+          ls -lh previous.zip
+
+      - name: Deploy
+        id: deploy
+        run: |
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --zip-file fileb://function.zip \
+            --query '{LastModified: LastModified, CodeSha256: CodeSha256}' \
+            --output json
+          aws lambda wait function-updated-v2 --function-name "$FUNCTION_NAME"
+
+      # Exercises the deployed code without calling Gemini or writing to DynamoDB:
+      # a CORS preflight (module loads, handler runs) and an empty POST (body parsing).
+      - name: Smoke test
+        run: |
+          invoke() {
+            aws lambda invoke --function-name "$FUNCTION_NAME" \
+              --cli-binary-format raw-in-base64-out \
+              --payload "$1" response.json > invoke.json
+            if jq -e '.FunctionError' invoke.json > /dev/null; then
+              echo "::error::Lambda error: $(cat response.json)"
+              return 1
+            fi
+            jq -e --argjson code "$2" '.statusCode == $code' response.json > /dev/null \
+              || { echo "::error::Expected $2, got: $(cat response.json)"; return 1; }
+            echo "✓ $2"
+          }
+          invoke '{"httpMethod":"OPTIONS","headers":{}}' 204
+          invoke '{"httpMethod":"POST","headers":{},"body":"{}"}' 400
+
+      - name: Roll back on failure
+        if: failure() && steps.backup.outcome == 'success' && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure')
+        run: |
+          aws lambda update-function-code --function-name "$FUNCTION_NAME" --zip-file fileb://previous.zip > /dev/null
+          aws lambda wait function-updated-v2 --function-name "$FUNCTION_NAME"
+          echo "::error::Deploy failed its checks; the previous code was restored."
+
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "### Chatbot Lambda deployed ✅"
+            echo ""
+            echo "- Function: \`$FUNCTION_NAME\` ($AWS_REGION)"
+            echo "- Commit: \`${GITHUB_SHA::7}\`"
+            echo "- Smoke test: OPTIONS 204, empty POST 400"
+          } >> "$GITHUB_STEP_SUMMARY"

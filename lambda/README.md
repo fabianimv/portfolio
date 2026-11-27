@@ -22,11 +22,40 @@ Lambda `portfolio-chatbot-handler` + API Gateway + DynamoDB for the portfolio's 
 | `ALLOWED_ORIGINS` | no | `*` (e.g. `https://fabianimv.github.io` to restrict CORS) |
 | `MESSAGES_TABLE` / `SESSIONS_TABLE` | no | `portfolio-chatbot-messages` / `portfolio-chatbot-sessions` |
 
-## Deploy
+## Automatic deploys (GitHub Actions)
+
+`.github/workflows/deploy-lambda.yml`:
+
+- **Every PR** that touches the Lambda runs `node --check` and the unit tests (`npm test`).
+- **Every push to `main`** that touches the Lambda (or a manual run from the Actions tab) runs the tests, then:
+  1. checks the function runtime is Node.js 18+,
+  2. builds `index.js` + `package.json` + production `node_modules` into a zip,
+  3. backs up the code currently deployed,
+  4. updates the function code (environment variables such as `GEMINI_API_KEY` are never touched),
+  5. smoke-tests the live function (CORS preflight → 204, empty POST → 400; neither calls Gemini nor writes to DynamoDB),
+  6. **restores the backup automatically** if any step after the update fails.
+
+AWS access uses GitHub OIDC: no AWS keys are stored in GitHub. The role can only be assumed by `main` of this repo, and can only read, update and invoke this one function.
+
+### One-time setup
+
+1. With AWS credentials that can manage IAM, run:
+
+   ```bash
+   bash lambda/setup-github-deploy.sh
+   ```
+
+   It creates the GitHub OIDC provider (if missing) and the `github-deploy-portfolio-chatbot` role, and prints its ARN.
+2. In GitHub → Settings → Secrets and variables → Actions → **Variables**, create `AWS_LAMBDA_DEPLOY_ROLE_ARN` with that ARN.
+3. Actions → Deploy Chatbot Lambda → **Run workflow** to check it end to end.
+
+Until the variable exists, the deploy job is skipped and only the tests run.
+
+## Manual deploy
 
 Option A, console / VS Code AWS Toolkit: replace the function's `index.js` with `lambda/index.js` and deploy. It uses no dependencies beyond the AWS SDK v3 included in the Node.js runtime.
 
-Option B, script:
+Option B, script (also creates the function, IAM role and API Gateway from scratch):
 
 ```bash
 cd lambda
